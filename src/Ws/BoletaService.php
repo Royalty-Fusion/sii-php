@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace RoyaltyFusion\Sii\Ws;
 
+use RoyaltyFusion\Sii\Exception\UploadUncertainException;
 use RoyaltyFusion\Sii\Exception\WebServiceException;
+use RoyaltyFusion\Sii\Util\Clock;
 use RoyaltyFusion\Sii\Util\Rut;
 use RoyaltyFusion\Sii\Ws\Auth\TokenProviderInterface;
 use RoyaltyFusion\Sii\Ws\Result\DocumentResult;
@@ -32,7 +34,7 @@ final class BoletaService
     {
         $sender = Rut::parse($rutEnvia);
         $company = Rut::parse($rutEmisor);
-        $fileName ??= sprintf('EnvioBOLETA_%d_%s.xml', $company->number, date('YmdHis'));
+        $fileName ??= sprintf('EnvioBOLETA_%d_%s.xml', $company->number, Clock::now()->format('YmdHis'));
         [$contentType, $body] = Multipart::build([
             'rutSender' => (string) $sender->number,
             'dvSender' => $sender->dv,
@@ -40,14 +42,22 @@ final class BoletaService
             'dvCompany' => $company->dv,
         ], 'archivo', $fileName, $xml, 'text/xml');
 
-        $response = $this->http->request('POST', $this->endpoints->boletaUpload, [
-            'headers' => [
-                'Content-Type' => $contentType,
-                'Cookie' => 'TOKEN='.$this->tokens->getToken(),
-                'Accept' => 'application/json',
-            ],
-            'body' => $body,
-        ]);
+        $token = $this->tokens->getToken();
+        try {
+            $response = $this->http->request('POST', $this->endpoints->boletaUpload, [
+                'headers' => [
+                    'Content-Type' => $contentType,
+                    'Cookie' => 'TOKEN='.$token,
+                    'Accept' => 'application/json',
+                ],
+                'body' => $body,
+            ], false);
+        } catch (WebServiceException $e) {
+            throw new UploadUncertainException('Se perdió la comunicación con el SII durante el envío de boletas; no se sabe si el sobre fue recibido. Reconcilie antes de reenviar.', null, null, null, $e);
+        }
+        if ($response->status >= 500) {
+            throw new UploadUncertainException(sprintf('El SII respondió HTTP %d al envío de boletas; no se sabe si el sobre fue recibido.', $response->status), null, $response->body, $response->status);
+        }
         if (\in_array($response->status, [401, 403], true) && $retryOnAuthError) {
             $this->tokens->invalidate();
 
@@ -55,7 +65,7 @@ final class BoletaService
         }
         $data = json_decode($response->body, true);
         if (!\is_array($data)) {
-            return new SendResult(false, null, (string) $response->status, sprintf('Respuesta inesperada del SII (HTTP %d).', $response->status), $xml, $fileName, $response->body);
+            return new SendResult(false, null, (string) $response->status, sprintf('Respuesta inesperada del SII (HTTP %d).', $response->status), $xml, $fileName, $response->body, rutEmisor: (string) $company, rutEnvia: (string) $sender, boleta: true);
         }
         $trackId = isset($data['trackid']) ? (string) $data['trackid'] : null;
         $estado = isset($data['estado']) ? (string) $data['estado'] : null;
@@ -69,6 +79,9 @@ final class BoletaService
             fileName: $fileName,
             rawResponse: $response->body,
             receivedAt: isset($data['fecha_recepcion']) ? (string) $data['fecha_recepcion'] : null,
+            rutEmisor: (string) $company,
+            rutEnvia: (string) $sender,
+            boleta: true,
         );
     }
 

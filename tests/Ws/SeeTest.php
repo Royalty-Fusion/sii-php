@@ -7,6 +7,7 @@ namespace RoyaltyFusion\Sii\Tests\Ws;
 use PHPUnit\Framework\TestCase;
 use RoyaltyFusion\Sii\Environment;
 use RoyaltyFusion\Sii\Exception\AuthenticationException;
+use RoyaltyFusion\Sii\Exception\UploadUncertainException;
 use RoyaltyFusion\Sii\Exception\ValidationException;
 use RoyaltyFusion\Sii\Model\Resolution;
 use RoyaltyFusion\Sii\See;
@@ -15,6 +16,10 @@ use RoyaltyFusion\Sii\Tests\Fixtures;
 use RoyaltyFusion\Sii\Util\Text;
 use RoyaltyFusion\Sii\Ws\HttpTransport;
 use RoyaltyFusion\Sii\Ws\RegistroReclamoService;
+use RoyaltyFusion\Sii\Ws\Result\DteStatus;
+use RoyaltyFusion\Sii\Ws\Result\EnvioStatistic;
+use RoyaltyFusion\Sii\Ws\Result\EnvioStatus;
+use RoyaltyFusion\Sii\Ws\Result\SendResult;
 use RoyaltyFusion\Sii\Xmldsig\XmlSignatureVerifier;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -225,5 +230,94 @@ final class SeeTest extends TestCase
         self::assertSame('https://palena.sii.cl/cgi_dte/UPL/DTEUpload', $endpoints->upload);
         self::assertSame('https://rahue.sii.cl/recursos/v1/boleta.electronica.envio', $endpoints->boletaUpload);
         self::assertSame('https://api.sii.cl/recursos/v1/boleta.electronica.token', $endpoints->boletaToken);
+    }
+
+    public function testEstadoPersistibleYResumeStatus(): void
+    {
+        $see = $this->see([
+            new MockResponse(SiiResponses::seed()),
+            new MockResponse(SiiResponses::token()),
+            new MockResponse(SiiResponses::upload('0', '777')),
+            new MockResponse(SiiResponses::estUp('EPR')),
+        ]);
+        $result = $see->sendBatch([Documents::factura(5), Documents::notaCredito(6)]);
+        $estado = json_decode((string) json_encode($result->toArray()), true);
+
+        self::assertSame('777', $estado['track_id']);
+        self::assertSame('76192083-9', $estado['rut_emisor']);
+        self::assertSame('11111111-1', $estado['rut_envia']);
+        self::assertSame('certificacion', $estado['ambiente']);
+        self::assertFalse($estado['boleta']);
+        self::assertSame(['tipo' => 33, 'folio' => 5, 'fecha_emision' => '2026-11-02', 'rut_receptor' => '96790240-3', 'monto_total' => 1072231], $estado['documentos'][0]);
+        self::assertSame(61, $estado['documentos'][1]['tipo']);
+        self::assertSame('2026-11-02T10:30:00-03:00', $estado['enviado_en']);
+        self::assertSame($result->getXml(), base64_decode($estado['sobre']));
+
+        $restaurado = SendResult::fromArray($estado);
+        self::assertSame($result->getXml(), $restaurado->getXml());
+        self::assertCount(2, $restaurado->documents);
+
+        // Otro proceso (cron) consulta el estado sin rearmar los documentos.
+        $status = $see->resumeStatus($estado);
+        self::assertSame('EPR', $status->estado);
+        self::assertTrue($status->isPartiallyRejected());
+        self::assertStringContainsString('<TrackId xsi:type="xsd:string">777</TrackId>', (string) $this->requests[3]['options']['body']);
+    }
+
+    public function testSubidaInciertaYReconciliacion(): void
+    {
+        $see = $this->see([
+            new MockResponse(SiiResponses::seed()),
+            new MockResponse(SiiResponses::token()),
+            new MockResponse('', ['error' => 'Connection reset by peer']),
+            // reconciliación: la factura llegó, la nota no
+            new MockResponse(SiiResponses::estDte()),
+            new MockResponse(str_replace(['DOK', 'Documento Recibido por el SII. Datos Coinciden con los Registrados'], ['FAU', 'Documento No Recibido por el SII'], SiiResponses::estDte())),
+        ]);
+        try {
+            $see->sendBatch([Documents::factura(8), Documents::notaCredito(9)]);
+            self::fail('Debió lanzar UploadUncertainException');
+        } catch (UploadUncertainException $e) {
+            $estado = $e->getState();
+        }
+        self::assertCount(3, $this->requests, 'La subida no se reintenta automáticamente');
+        self::assertTrue($estado['incierto']);
+        self::assertNull($estado['track_id']);
+        self::assertCount(2, $estado['documentos']);
+
+        $estados = $see->reconcile($estado);
+        self::assertTrue($estados['T33F8']->isReceived());
+        self::assertTrue($estados['T33F8']->isAccepted());
+        self::assertTrue($estados['T61F9']->isPending());
+        self::assertFalse($estados['T61F9']->isReceived());
+        self::assertStringContainsString('<TipoDte xsi:type="xsd:string">61</TipoDte><FolioDte xsi:type="xsd:string">9</FolioDte>', (string) $this->requests[4]['options']['body']);
+    }
+
+    public function testContratoDeEstados(): void
+    {
+        $envio = static fn (string $estado, int $acept = 0, int $rech = 0, int $rep = 0) => new EnvioStatus('1', $estado, null, $acept + $rech + $rep > 0 ? [new EnvioStatistic(33, $acept + $rech, $acept, $rech, $rep)] : []);
+        foreach (['REC', 'SOK', 'CRT', 'FOK', 'PDR'] as $e) {
+            self::assertTrue($envio($e)->isPending(), $e);
+            self::assertFalse($envio($e)->isFinal(), $e);
+        }
+        foreach (['RSC', 'RFR', 'RCT', 'RCH'] as $e) {
+            self::assertTrue($envio($e)->isRejected(), $e);
+            self::assertTrue($envio($e)->isFinal(), $e);
+        }
+        self::assertTrue($envio('EPR', 2)->isAccepted());
+        self::assertTrue($envio('EPR', 1, 0, 1)->isAcceptedWithObjections());
+        self::assertTrue($envio('EPR', 0, 2)->isRejected());
+        self::assertTrue($envio('EPR', 1, 1)->isPartiallyRejected());
+        self::assertTrue($envio('-11')->isQueryError());
+        self::assertTrue($envio('-11')->isPending());
+
+        $dte = static fn (string $e) => new DteStatus($e, null);
+        self::assertTrue($dte('DOK')->isAccepted());
+        self::assertTrue($dte('MMC')->isAccepted());
+        self::assertTrue($dte('FAU')->isPending());
+        self::assertTrue($dte('FNA')->isRejected());
+        self::assertTrue($dte('ANC')->isAnnulled());
+        self::assertTrue($dte('DNK')->isMismatch());
+        self::assertTrue($dte('DNK')->isReceived());
     }
 }

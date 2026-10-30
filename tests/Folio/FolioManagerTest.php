@@ -95,7 +95,8 @@ final class FolioManagerTest extends TestCase
     public function testSeeAsignaFolioAutomaticamente(): void
     {
         $see = (new See(Fixtures::certificate(), Environment::CERTIFICACION, new Resolution('2026-10-01', 0), Fixtures::cafs(), clock: self::clock()))
-            ->setCompany(Fixtures::emisor());
+            ->setCompany(Fixtures::emisor())
+            ->setFolioStore(new InMemoryFolioStore());
         $a = $see->prepare(Documents::factura()->setFolio(null));
         $b = $see->prepare(Documents::factura()->setFolio(null));
         self::assertSame(1, $a->document->getFolio());
@@ -128,5 +129,14 @@ final class FolioManagerTest extends TestCase
         $xml = (string) file_get_contents(Fixtures::DIR.'/caf/caf_'.$tipo.'.xml');
 
         return Caf::fromXml(str_replace(["<D>1</D>", "<H>100</H>"], ["<D>{$desde}</D>", "<H>{$hasta}</H>"], $xml));
+    }
+
+    public function testSinRegistroDeFoliosNoAsignaAutomaticamente(): void
+    {
+        $see = (new See(Fixtures::certificate(), Environment::CERTIFICACION, new Resolution('2026-10-01', 0), Fixtures::cafs(), clock: self::clock()))
+            ->setCompany(Fixtures::emisor());
+        $this->expectException(\RoyaltyFusion\Sii\Exception\InvalidArgumentException::class);
+        $this->expectExceptionMessage('setFolioStore');
+        $see->prepare(Documents::factura()->setFolio(null));
     }
 }

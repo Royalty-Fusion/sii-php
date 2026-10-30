@@ -17,7 +17,7 @@ final class Resolution
     public function __construct(\DateTimeInterface|string $fecha, public readonly int $numero)
     {
         $this->fecha = \is_string($fecha)
-            ? new \DateTimeImmutable($fecha, new \DateTimeZone('America/Santiago'))
+            ? \RoyaltyFusion\Sii\Util\Clock::date(substr(trim($fecha), 0, 10))
             : \DateTimeImmutable::createFromInterface($fecha);
     }
 }

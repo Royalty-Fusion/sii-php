@@ -48,7 +48,7 @@ final class Emitter
         private readonly EnvelopeBuilder $envelopeBuilder = new EnvelopeBuilder(),
         ?\Closure $clock = null,
     ) {
-        $this->clock = $clock ?? static fn (): \DateTimeImmutable => new \DateTimeImmutable('now', new \DateTimeZone('America/Santiago'));
+        $this->clock = Util\Clock::wrap($clock);
     }
 
     public function getCertificate(): Certificate
@@ -64,6 +64,10 @@ final class Emitter
     /** Ejecuta sólo las validaciones (negocio, CAF y certificado) sin generar XML. */
     public function validate(AbstractDocument $document): ValidationResult
     {
+        if ($document->getFechaEmision() === null) {
+            // Sin fecha de emisión se usa la fecha actual de Chile (no la zona horaria del servidor).
+            $document->setFechaEmision(Util\Clock::today(($this->clock)()));
+        }
         $caf = $this->findCaf($document);
         $result = $this->validator->validate($document, $caf, $this->environment, true, ($this->clock)());
         $result->merge($this->validateCertificate());

@@ -41,8 +41,7 @@ final class SoapClient
             .'</ns1:'.$method.'></soapenv:Body></soapenv:Envelope>';
 
         $doc = $this->post($url, $envelope, $token);
-        $nodes = (new \DOMXPath($doc))->query('//*[local-name()="Body"]/*[1]/*[1]');
-        $return = $nodes === false ? null : $nodes->item(0);
+        $return = XmlUtil::first(new \DOMXPath($doc), '//*[local-name()="Body"]/*[1]/*[1]');
         if ($return === null) {
             throw new WebServiceException(sprintf('Respuesta SOAP de %s sin valor de retorno.', $method), null, $doc->saveXML() ?: null);
         }

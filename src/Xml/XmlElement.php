@@ -54,7 +54,11 @@ final class XmlElement
         return $this;
     }
 
-    /** Agrega un hijo y lo retorna para seguir construyendo dentro de él. */
+    /**
+     * Agrega un hijo y lo retorna para seguir construyendo dentro de él.
+     *
+     * @param array<string, string|int|float|null> $attributes
+     */
     public function child(string $name, array $attributes = []): self
     {
         $child = new self($name, $attributes);

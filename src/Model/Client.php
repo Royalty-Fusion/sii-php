@@ -22,6 +22,25 @@ class Client
     private ?string $ciudadPostal = null;
     private ?Foreigner $extranjero = null;
 
+    /** Constructor final: permite los constructores estáticos con new static() de forma segura. */
+    final public function __construct()
+    {
+    }
+
+    /**
+     * Receptor genérico para boletas sin cliente identificado (RUT 66666666-6). Sólo es válido en
+     * boletas (39, 41) y en notas de crédito/débito que referencian una boleta.
+     */
+    public static function consumidorFinal(string $razonSocial = 'Consumidor final'): static
+    {
+        return (new static())->setRut(\RoyaltyFusion\Sii\Util\Rut::CONSUMIDOR_FINAL)->setRazonSocial($razonSocial);
+    }
+
+    public function isConsumidorFinal(): bool
+    {
+        return $this->rut !== null && \RoyaltyFusion\Sii\Util\Rut::isConsumidorFinal($this->rut);
+    }
+
     public function getRut(): ?string
     {
         return $this->rut;

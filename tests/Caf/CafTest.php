@@ -32,8 +32,8 @@ final class CafTest extends TestCase
     {
         $factura = Fixtures::caf(33);
         self::assertSame('2027-04-01', $factura->getFechaVencimiento()?->format('Y-m-d'));
-        self::assertFalse($factura->isVencido(new \DateTimeImmutable('2027-04-01')));
-        self::assertTrue($factura->isVencido(new \DateTimeImmutable('2027-04-02')));
+        self::assertFalse($factura->isVencido(new \DateTimeImmutable('2027-04-01 12:00', new \DateTimeZone('America/Santiago'))));
+        self::assertTrue($factura->isVencido(new \DateTimeImmutable('2027-04-02 12:00', new \DateTimeZone('America/Santiago'))));
         // Los folios de boletas no vencen.
         self::assertNull(Fixtures::caf(39)->getFechaVencimiento());
         self::assertFalse(Fixtures::caf(39)->isVencido(new \DateTimeImmutable('2040-01-01')));

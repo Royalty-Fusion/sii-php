@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RoyaltyFusion\Sii\Caf;
 
 use RoyaltyFusion\Sii\Exception\CafException;
+use RoyaltyFusion\Sii\Util\Clock;
 use RoyaltyFusion\Sii\Util\Rut;
 use RoyaltyFusion\Sii\Util\Text;
 use RoyaltyFusion\Sii\Xml\XmlUtil;
@@ -78,7 +79,7 @@ final class Caf
                 throw new CafException(sprintf('El CAF no contiene el nodo %s.', $path));
             }
 
-            return trim((string) $nodes->item(0)?->textContent);
+            return trim(XmlUtil::text($nodes->item(0)));
         };
 
         $tipo = (int) $get('/AUTORIZACION/CAF/DA/TD');
@@ -87,8 +88,9 @@ final class Caf
         if ($desde <= 0 || $hasta < $desde) {
             throw new CafException(sprintf('Rango de folios inválido en el CAF (%d - %d).', $desde, $hasta));
         }
-        $fa = \DateTimeImmutable::createFromFormat('!Y-m-d', $get('/AUTORIZACION/CAF/DA/FA'), new \DateTimeZone('America/Santiago'));
-        if ($fa === false) {
+        try {
+            $fa = Clock::date($get('/AUTORIZACION/CAF/DA/FA'));
+        } catch (\RoyaltyFusion\Sii\Exception\InvalidArgumentException) {
             throw new CafException('Fecha de autorización (FA) inválida en el CAF.');
         }
 
@@ -188,9 +190,7 @@ final class Caf
         if ($vencimiento === null) {
             return false;
         }
-        $at = \DateTimeImmutable::createFromInterface($at ?? new \DateTimeImmutable('now', new \DateTimeZone('America/Santiago')));
-
-        return $at->setTime(0, 0) > $vencimiento;
+        return Clock::today($at) > $vencimiento;
     }
 
     /** Nodo <CAF> (UTF-8) listo para insertarse en el TED. */

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RoyaltyFusion\Sii\Certificate;
 
 use RoyaltyFusion\Sii\Exception\CertificateException;
+use RoyaltyFusion\Sii\Util\Clock;
 use RoyaltyFusion\Sii\Util\Rut;
 
 /**
@@ -225,17 +226,17 @@ final class Certificate
 
     public function getValidFrom(): \DateTimeImmutable
     {
-        return (new \DateTimeImmutable())->setTimestamp((int) $this->parsed['validFrom_time_t']);
+        return (new \DateTimeImmutable('@'.(int) $this->parsed['validFrom_time_t']))->setTimezone(Clock::timezone());
     }
 
     public function getValidTo(): \DateTimeImmutable
     {
-        return (new \DateTimeImmutable())->setTimestamp((int) $this->parsed['validTo_time_t']);
+        return (new \DateTimeImmutable('@'.(int) $this->parsed['validTo_time_t']))->setTimezone(Clock::timezone());
     }
 
     public function isValidAt(?\DateTimeInterface $at = null): bool
     {
-        $ts = ($at ?? new \DateTimeImmutable())->getTimestamp();
+        $ts = ($at ?? Clock::now())->getTimestamp();
 
         return $ts >= (int) $this->parsed['validFrom_time_t'] && $ts <= (int) $this->parsed['validTo_time_t'];
     }
@@ -243,7 +244,7 @@ final class Certificate
     /** Días restantes de vigencia (negativo si está vencido). */
     public function getDaysToExpire(?\DateTimeInterface $at = null): int
     {
-        $ts = ($at ?? new \DateTimeImmutable())->getTimestamp();
+        $ts = ($at ?? Clock::now())->getTimestamp();
 
         return (int) floor(((int) $this->parsed['validTo_time_t'] - $ts) / 86400);
     }

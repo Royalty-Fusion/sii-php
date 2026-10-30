@@ -9,6 +9,7 @@ use Psr\Log\NullLogger;
 use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Exception\AuthenticationException;
 use RoyaltyFusion\Sii\Exception\WebServiceException;
+use RoyaltyFusion\Sii\Util\RedactingLogger;
 use RoyaltyFusion\Sii\Util\Text;
 use Symfony\Component\HttpClient\HttpClient;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
@@ -36,7 +37,7 @@ final class PortalSession
         ?LoggerInterface $logger = null,
     ) {
         $this->client = $client ?? HttpClient::create();
-        $this->logger = $logger ?? new NullLogger();
+        $this->logger = $logger === null ? new NullLogger() : ($logger instanceof RedactingLogger ? $logger : new RedactingLogger($logger));
     }
 
     public function __destruct()

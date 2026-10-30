@@ -43,8 +43,8 @@ final class EnvioDteReader
         preg_match_all('#<DTE[\s>].*?</DTE>#s', $utf8, $raw);
 
         $documentos = [];
-        foreach ($xpath->query('/sii:EnvioDTE/sii:SetDTE/sii:DTE') ?: [] as $i => $dte) {
-            $node = $xpath->query('sii:Documento|sii:Exportaciones|sii:Liquidacion', $dte)?->item(0);
+        foreach (XmlUtil::elements($xpath, '/sii:EnvioDTE/sii:SetDTE/sii:DTE') as $i => $dte) {
+            $node = XmlUtil::first($xpath, 'sii:Documento|sii:Exportaciones|sii:Liquidacion', $dte);
             if (!$node instanceof \DOMElement) {
                 continue;
             }
@@ -54,7 +54,7 @@ final class EnvioDteReader
             $documentos[] = new ReceivedDte(
                 (int) $v('sii:Encabezado/sii:IdDoc/sii:TipoDTE'),
                 (int) $v('sii:Encabezado/sii:IdDoc/sii:Folio'),
-                new \DateTimeImmutable($v('sii:Encabezado/sii:IdDoc/sii:FchEmis') ?: 'today'),
+                self::fecha($v('sii:Encabezado/sii:IdDoc/sii:FchEmis')),
                 $v('sii:Encabezado/sii:Emisor/sii:RUTEmisor'),
                 $v('sii:Encabezado/sii:Emisor/sii:RznSoc'),
                 $v('sii:Encabezado/sii:Receptor/sii:RUTRecep'),
@@ -86,10 +86,19 @@ final class EnvioDteReader
         );
     }
 
+    private static function fecha(string $ymd): \DateTimeImmutable
+    {
+        try {
+            return \RoyaltyFusion\Sii\Util\Clock::date($ymd);
+        } catch (\Throwable) {
+            return \RoyaltyFusion\Sii\Util\Clock::today();
+        }
+    }
+
     /** Verifica FRMT del TED con la clave pública del CAF incluido en el propio timbre. */
     private function verifyTed(\DOMXPath $xpath, \DOMElement $documento, ?string $rawDte): bool
     {
-        $dd = $xpath->query('sii:TED/sii:DD', $documento)?->item(0);
+        $dd = XmlUtil::first($xpath, 'sii:TED/sii:DD', $documento);
         $frmt = trim((string) $xpath->evaluate('string(sii:TED/sii:FRMT)', $documento));
         $m = trim((string) $xpath->evaluate('string(sii:TED/sii:DD/sii:CAF/sii:DA/sii:RSAPK/sii:M)', $documento));
         $e = trim((string) $xpath->evaluate('string(sii:TED/sii:DD/sii:CAF/sii:DA/sii:RSAPK/sii:E)', $documento));
@@ -99,8 +108,8 @@ final class EnvioDteReader
             return false;
         }
         $candidates = [];
-        if ($rawDte !== null && preg_match('#<DD>.*?</DD>#s', $rawDte, $m)) {
-            $candidates[] = (string) preg_replace('/>\s+</', '><', $m[0]);
+        if ($rawDte !== null && preg_match('#<DD>.*?</DD>#s', $rawDte, $match)) {
+            $candidates[] = (string) preg_replace('/>\s+</', '><', $match[0]);
         }
         // Alternativa: el DD reconstruido (sin namespaces heredados ni espacios entre nodos).
         $candidates[] = self::serialize($dd);

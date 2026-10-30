@@ -11,15 +11,18 @@ use RoyaltyFusion\Sii\Caf\InMemoryCafRepository;
 use RoyaltyFusion\Sii\Calculator\TotalsCalculator;
 use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Exception\InvalidArgumentException;
+use RoyaltyFusion\Sii\Exception\UploadUncertainException;
 use RoyaltyFusion\Sii\Folio\FolioManager;
 use RoyaltyFusion\Sii\Folio\FolioStoreInterface;
-use RoyaltyFusion\Sii\Folio\InMemoryFolioStore;
 use RoyaltyFusion\Sii\Folio\SiiFolioService;
 use RoyaltyFusion\Sii\Model\AbstractDocument;
 use RoyaltyFusion\Sii\Model\Boleta;
 use RoyaltyFusion\Sii\Model\Company;
 use RoyaltyFusion\Sii\Model\Resolution;
+use RoyaltyFusion\Sii\Report\RepresentationBuilder;
+use RoyaltyFusion\Sii\Report\RepresentationData;
 use RoyaltyFusion\Sii\Util\Rut;
+use RoyaltyFusion\Sii\Xml\XmlUtil;
 use RoyaltyFusion\Sii\Validator\ValidationResult;
 use RoyaltyFusion\Sii\Ws\Auth\BoletaTokenProvider;
 use RoyaltyFusion\Sii\Ws\Auth\DteTokenProvider;
@@ -30,6 +33,7 @@ use RoyaltyFusion\Sii\Ws\DteService;
 use RoyaltyFusion\Sii\Ws\Endpoints;
 use RoyaltyFusion\Sii\Ws\HttpTransport;
 use RoyaltyFusion\Sii\Ws\RegistroReclamoService;
+use RoyaltyFusion\Sii\Ws\Result\DocumentRef;
 use RoyaltyFusion\Sii\Ws\Result\DteStatus;
 use RoyaltyFusion\Sii\Ws\Result\EnvioStatus;
 use RoyaltyFusion\Sii\Ws\Result\SendResult;
@@ -54,12 +58,15 @@ final class See
     private readonly TokenStorageInterface $tokenStorage;
     private ?Company $company = null;
     private ?string $rutEnvia = null;
+    private ?string $oficinaSii = null;
     private ?DteService $dteService = null;
     private ?BoletaService $boletaService = null;
     private ?RegistroReclamoService $reclamoService = null;
     private ?FolioManager $folioManager = null;
     private ?SiiFolioService $folioService = null;
-    private ?\Closure $clock;
+    private bool $folioServiceEnabled = false;
+    /** @var \Closure(): \DateTimeImmutable */
+    private \Closure $clock;
     private ?HttpClientInterface $httpClient;
     private ?LoggerInterface $logger;
 
@@ -82,7 +89,7 @@ final class See
         $this->soap = new SoapClient($this->http);
         $this->tokenStorage = $tokenStorage ?? new InMemoryTokenStorage();
         $this->emitter = new Emitter($certificate, $this->cafs, $environment, clock: $clock);
-        $this->clock = $clock;
+        $this->clock = Util\Clock::wrap($clock);
         $this->httpClient = $httpClient;
         $this->logger = $logger;
     }
@@ -121,6 +128,23 @@ final class See
         return $this;
     }
 
+    /** Oficina (unidad) del SII del emisor, impresa bajo el recuadro del documento (ej. "Santiago Oriente"). */
+    public function setOficinaSii(?string $oficinaSii): self
+    {
+        $this->oficinaSii = $oficinaSii;
+
+        return $this;
+    }
+
+    /**
+     * Datos para la representación impresa (emisor, receptor, detalle, totales, referencias, resolución,
+     * oficina del SII y el TED con los parámetros del PDF417), sin depender de librerías de PDF.
+     */
+    public function getRepresentationData(PreparedDocument $prepared, ?string $oficinaSii = null): RepresentationData
+    {
+        return (new RepresentationBuilder())->build($prepared, $this->resolution, $oficinaSii ?? $this->oficinaSii);
+    }
+
     public function setResolution(Resolution $resolution): self
     {
         $this->resolution = $resolution;
@@ -156,8 +180,8 @@ final class See
     /**
      * Valida, timbra y firma el documento.
      *
-     * Si el documento no tiene folio, se asigna el siguiente disponible (ver getFolioManager());
-     * si la emisión falla, el folio se libera.
+     * Si el documento no tiene folio y hay un FolioStore configurado, se asigna el siguiente disponible
+     * (y se libera si la emisión falla).
      */
     public function prepare(AbstractDocument $document): PreparedDocument
     {
@@ -166,12 +190,13 @@ final class See
             return $this->emitter->prepare($document);
         }
         $rut = $document->getEmisor()?->getRut() ?? throw new InvalidArgumentException('El documento no tiene emisor para asignar el folio.');
-        $folio = $this->getFolioManager()->next($rut, $document->getTipo());
+        $manager = $this->getFolioManager();
+        $folio = $manager->next($rut, $document->getTipo());
         $document->setFolio($folio);
         try {
             return $this->emitter->prepare($document);
         } catch (\Throwable $e) {
-            $this->getFolioManager()->release($rut, $document->getTipo(), $folio);
+            $manager->release($rut, $document->getTipo(), $folio);
             $document->setFolio(null);
 
             throw $e;
@@ -179,8 +204,8 @@ final class See
     }
 
     /**
-     * Registro de folios usados. Por defecto en memoria: en producción use FileFolioStore o
-     * una implementación sobre la base de datos del ERP.
+     * Registro de folios usados de esta empresa: FileFolioStore, PdoFolioStore o una implementación propia.
+     * Sin él no se asignan folios automáticamente (un registro en memoria duplicaría folios entre procesos).
      */
     public function setFolioStore(FolioStoreInterface $store): self
     {
@@ -189,19 +214,32 @@ final class See
         return $this;
     }
 
-    /** Asignación y consulta de folios disponibles en los CAF cargados. */
+    /** Asignación y consulta de folios disponibles. Requiere setFolioStore(). */
     public function getFolioManager(): FolioManager
     {
-        return $this->folioManager ??= new FolioManager($this->cafs, new InMemoryFolioStore(), $this->environment, $this->clock);
+        return $this->folioManager ?? throw new InvalidArgumentException('Configure un registro de folios con setFolioStore() o SeeConfig::withFolioStore() (FileFolioStore, PdoFolioStore o propio) para asignar y consultar folios.');
+    }
+
+    /** Habilita el timbraje automatizado en el sitio web del SII (SiiFolioService). */
+    public function enableFolioService(bool $enabled = true): self
+    {
+        $this->folioServiceEnabled = $enabled;
+
+        return $this;
     }
 
     /**
      * Timbraje electrónico en el sitio del SII (solicitar, consultar y reobtener CAF).
      *
-     * EXPERIMENTAL: el SII no ofrece web service para esto; se automatizan los formularios web.
+     * EXPERIMENTAL y desactivado por defecto: el SII no ofrece web service para esto; se automatizan
+     * los formularios web, que pueden cambiar sin aviso. Actívelo con enableFolioService().
      */
     public function getFolioService(): SiiFolioService
     {
+        if (!$this->folioServiceEnabled) {
+            throw new InvalidArgumentException('SiiFolioService está desactivado: automatiza el formulario web de timbraje del SII (no hay web service oficial) y puede dejar de funcionar si el SII cambia el sitio. Actívelo explícitamente con enableFolioService() o SeeConfig::withFolioService().');
+        }
+
         return $this->folioService ??= new SiiFolioService($this->certificate, $this->environment, $this->httpClient, $this->logger);
     }
 
@@ -242,7 +280,11 @@ final class See
         return $this->sendXml($xml, $rutEmisor, $prepared[0]->document instanceof Boleta);
     }
 
-    /** Envía un sobre ya firmado (por ejemplo, para reenviar uno almacenado). */
+    /**
+     * Envía un sobre ya firmado (por ejemplo, para reenviar uno almacenado tras un FAU).
+     *
+     * @throws UploadUncertainException si se cortó la comunicación durante la subida (ver getState())
+     */
     public function sendXml(string $envelopeXml, string $rutEmisor, ?bool $boleta = null): SendResult
     {
         $boleta ??= str_contains($envelopeXml, '<EnvioBOLETA');
@@ -250,10 +292,20 @@ final class See
         if ($rutEnvia === null) {
             throw new InvalidArgumentException('No se pudo obtener el RUT del titular del certificado; indíquelo con setRutEnvia().');
         }
+        $documents = self::documentRefs($envelopeXml);
 
-        return $boleta
-            ? $this->getBoletaService()->upload($envelopeXml, $rutEnvia, $rutEmisor)
-            : $this->getDteService()->upload($envelopeXml, $rutEnvia, $rutEmisor);
+        try {
+            $result = $boleta
+                ? $this->getBoletaService()->upload($envelopeXml, $rutEnvia, $rutEmisor)
+                : $this->getDteService()->upload($envelopeXml, $rutEnvia, $rutEmisor);
+        } catch (UploadUncertainException $e) {
+            $pending = new SendResult(false, null, null, $e->getMessage(), $envelopeXml, '', (string) $e->getResponseBody(),
+                rutEmisor: Rut::normalize($rutEmisor), rutEnvia: Rut::normalize($rutEnvia), boleta: $boleta, documents: $documents,
+                environment: $this->environment->value, sentAt: ($this->clock)());
+            throw $e->withState(['incierto' => true] + $pending->toArray());
+        }
+
+        return $result->withContext($documents, $this->environment->value, ($this->clock)());
     }
 
     /** Estado de un envío por Track ID. */
@@ -266,28 +318,106 @@ final class See
             : $this->getDteService()->getEnvioStatus($trackId, $rutEmisor);
     }
 
+    /**
+     * Consulta el estado de un envío guardado con SendResult::toArray() (por ejemplo, desde un cron),
+     * sin rearmar ni volver a firmar los documentos.
+     *
+     * @param array<string, mixed> $estado
+     */
+    public function resumeStatus(array $estado): EnvioStatus
+    {
+        $result = SendResult::fromArray($estado);
+        $this->assertSameEnvironment($result);
+        if ($result->trackId === null) {
+            throw new InvalidArgumentException('El envío no tiene TrackID (la subida falló o quedó incierta): use reconcile() para consultar cada documento.');
+        }
+
+        return $this->getStatus($result->trackId, (string) $result->rutEmisor, $result->boleta);
+    }
+
+    /**
+     * Consulta cada documento de un envío guardado por tipo, folio, RUT, monto y fecha. Sirve para
+     * reconciliar una subida incierta (UploadUncertainException::getState()) sin reutilizar folios:
+     *  - isReceived(): el SII tiene el documento (el folio está usado);
+     *  - isPending() (FAU): el SII no lo recibió; se puede reenviar el mismo sobre con sendXml().
+     *
+     * @param array<string, mixed> $estado
+     *
+     * @return array<string, DteStatus> indexado por ID ("T33F125")
+     */
+    public function reconcile(array $estado): array
+    {
+        $result = SendResult::fromArray($estado);
+        $this->assertSameEnvironment($result);
+        $out = [];
+        foreach ($result->documents as $ref) {
+            $out[$ref->getId()] = $this->getDocumentStatusFor($ref, (string) $result->rutEmisor, $result->boleta);
+        }
+
+        return $out;
+    }
+
     /** Estado de un documento emitido (si fue recibido por el SII y sus datos coinciden). */
     public function getDocumentStatus(AbstractDocument|PreparedDocument $document): DteStatus
     {
         $doc = $document instanceof PreparedDocument ? $document->document : $this->withCompany($document);
         $total = $document instanceof PreparedDocument ? $document->getMontoTotal() : (new TotalsCalculator())->calculate($doc)->totales->montoTotal;
-        $rutEmisor = (string) $doc->getEmisor()?->getRut();
-        $rutReceptor = $doc->getReceptor()?->getRut() ?? Rut::CONSUMIDOR_FINAL;
         $fecha = $doc->getFechaEmision() ?? throw new InvalidArgumentException('El documento no tiene fecha de emisión.');
+        $ref = new DocumentRef($doc->getTipo()->value, (int) $doc->getFolio(), $fecha->format('Y-m-d'), $doc->getReceptor()?->getRut() ?? Rut::CONSUMIDOR_FINAL, $total);
 
-        if ($doc instanceof Boleta) {
-            return $this->getBoletaService()->getBoletaStatus($rutEmisor, $doc->getTipo()->value, (int) $doc->getFolio(), $rutReceptor, (int) round((float) $total), $fecha);
+        return $this->getDocumentStatusFor($ref, (string) $doc->getEmisor()?->getRut(), $doc instanceof Boleta);
+    }
+
+    /** Estado de un documento a partir de sus datos (tipo, folio, fecha, RUT receptor y monto). */
+    public function getDocumentStatusFor(DocumentRef $ref, string $rutEmisor, ?bool $boleta = null): DteStatus
+    {
+        $boleta ??= \in_array($ref->tipoDte, [39, 41], true);
+        $monto = (int) round((float) $ref->montoTotal);
+        if ($boleta) {
+            return $this->getBoletaService()->getBoletaStatus($rutEmisor, $ref->tipoDte, $ref->folio, $ref->rutReceptor, $monto, $ref->getFechaEmision());
         }
 
         return $this->getDteService()->getDteStatus(
             (string) ($this->rutEnvia ?? $this->certificate->getRut()),
             $rutEmisor,
-            $rutReceptor,
-            $doc->getTipo()->value,
-            (int) $doc->getFolio(),
-            $fecha,
-            (int) round((float) $total),
+            $ref->rutReceptor,
+            $ref->tipoDte,
+            $ref->folio,
+            $ref->getFechaEmision(),
+            $monto,
         );
+    }
+
+    private function assertSameEnvironment(SendResult $result): void
+    {
+        if ($result->environment !== null && $result->environment !== $this->environment->value) {
+            throw new InvalidArgumentException(sprintf('El envío se hizo en el ambiente "%s" y esta instancia está en "%s".', $result->environment, $this->environment->value));
+        }
+    }
+
+    /**
+     * Documentos contenidos en un sobre firmado.
+     *
+     * @return list<DocumentRef>
+     */
+    private static function documentRefs(string $envelopeXml): array
+    {
+        $doc = XmlUtil::load($envelopeXml);
+        $xpath = XmlUtil::xpath($doc);
+        $refs = [];
+        foreach (XmlUtil::elements($xpath, '//sii:SetDTE/sii:DTE/*[@ID]') as $node) {
+            $v = static fn (string $path): string => trim((string) $xpath->evaluate('string('.$path.')', $node));
+            $monto = $v('sii:Encabezado/sii:Totales/sii:MntTotal');
+            $refs[] = new DocumentRef(
+                (int) $v('sii:Encabezado/sii:IdDoc/sii:TipoDTE'),
+                (int) $v('sii:Encabezado/sii:IdDoc/sii:Folio'),
+                $v('sii:Encabezado/sii:IdDoc/sii:FchEmis'),
+                $v('sii:Encabezado/sii:Receptor/sii:RUTRecep'),
+                str_contains($monto, '.') ? (float) $monto : (int) $monto,
+            );
+        }
+
+        return $refs;
     }
 
     public function getEmitter(): Emitter

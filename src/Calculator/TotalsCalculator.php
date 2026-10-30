@@ -80,10 +80,50 @@ final class TotalsCalculator
 
         $esperado = $document->getMontoTotalEsperado();
         if ($esperado !== null && abs((float) $esperado - (float) $totales->montoTotal) > 0.0001) {
-            $diferencias[] = sprintf('El monto total informado por el ERP (%s) no coincide con el calculado (%s).', $esperado, $totales->montoTotal);
+            $diferencias[] = sprintf('El monto total informado por el ERP (%s) no coincide con el calculado (%s); diferencia %s.%s',
+                $esperado, $totales->montoTotal, self::num((float) $esperado - (float) $totales->montoTotal, $decimales),
+                $this->diagnosticoRedondeo($lineas, $totales, $decimales));
         }
 
         return new Calculation($lineas, $globales, $totales, $this->otraMoneda($document, $totales), $decimales, $diferencias);
+    }
+
+    /**
+     * Explica dónde puede estar la diferencia con el total del ERP: líneas cuyo monto se redondeó y
+     * diferencia entre el IVA por línea (práctica común en ERP) y el IVA sobre el neto total (regla del SII).
+     *
+     * @param list<CalculatedLine> $lineas
+     */
+    private function diagnosticoRedondeo(array $lineas, Totals $totales, int $decimales): string
+    {
+        $partes = [];
+        foreach ($lineas as $linea) {
+            $d = $linea->detalle;
+            if ($d->getPrecio() === null) {
+                continue;
+            }
+            $bruto = (float) ($d->getCantidad() ?? 1) * (float) $d->getPrecio();
+            $exacto = round($bruto - $linea->descuentoMonto + $linea->recargoMonto, 6);
+            if (abs($exacto - (float) $linea->montoItem) > 1e-6) {
+                $partes[] = sprintf('Línea %d "%s": %s × %s = %s, redondeado a %s', $linea->numero, mb_substr((string) $d->getNombre(), 0, 30),
+                    rtrim(rtrim(number_format((float) ($d->getCantidad() ?? 1), 6, '.', ''), '0'), '.'),
+                    rtrim(rtrim(number_format((float) $d->getPrecio(), 6, '.', ''), '0'), '.'),
+                    rtrim(rtrim(number_format($exacto, 6, '.', ''), '0'), '.'), $linea->montoItem);
+            }
+        }
+        if ($totales->iva !== null && $totales->tasaIva !== null && $decimales === 0) {
+            $ivaPorLinea = 0;
+            foreach ($lineas as $linea) {
+                if ($linea->grupo === LineGroup::AFECTO) {
+                    $ivaPorLinea += (int) round((float) $linea->montoItem * $totales->tasaIva / 100);
+                }
+            }
+            if ($ivaPorLinea !== $totales->iva) {
+                $partes[] = sprintf('IVA por línea = %d, pero el SII calcula el IVA sobre el neto total = %d', $ivaPorLinea, $totales->iva);
+            }
+        }
+
+        return $partes === [] ? '' : ' Posibles causas: '.implode('; ', $partes).'.';
     }
 
     public function decimales(AbstractDocument $document): int

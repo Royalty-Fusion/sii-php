@@ -80,6 +80,38 @@ final class XmlUtil
         return implode('; ', $messages);
     }
 
+    /** Primer nodo que coincide con la expresión XPath (o null). */
+    public static function first(\DOMXPath $xpath, string $expression, ?\DOMNode $context = null): ?\DOMNode
+    {
+        $nodes = $xpath->query($expression, $context);
+        $node = $nodes === false ? null : $nodes->item(0);
+
+        return $node instanceof \DOMNode ? $node : null;
+    }
+
+    /**
+     * Elementos que coinciden con la expresión XPath.
+     *
+     * @return list<\DOMElement>
+     */
+    public static function elements(\DOMXPath $xpath, string $expression, ?\DOMNode $context = null): array
+    {
+        $out = [];
+        foreach ($xpath->query($expression, $context) ?: [] as $node) {
+            if ($node instanceof \DOMElement) {
+                $out[] = $node;
+            }
+        }
+
+        return $out;
+    }
+
+    /** Texto de un nodo devuelto por XPath ('' si no es un nodo DOM). */
+    public static function text(mixed $node): string
+    {
+        return $node instanceof \DOMNode ? (string) $node->textContent : '';
+    }
+
     /** Elimina la declaración XML inicial. */
     public static function stripDeclaration(string $xml): string
     {

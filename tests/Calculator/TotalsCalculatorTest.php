@@ -150,4 +150,53 @@ final class TotalsCalculatorTest extends TestCase
         self::assertSame(19.0, $o->iva);          // 18.050 / 950
         self::assertSame(119.0, $o->montoTotal);  // 113.050 / 950
     }
+
+    public function testClpSinDecimales(): void
+    {
+        foreach ([Documents::factura(), Documents::facturaExenta(), Documents::facturaCompra(), Documents::notaCredito(), Documents::boleta(), Documents::facturaOtraMonedaEImpuestos()] as $doc) {
+            $c = $this->calculator->calculate($doc);
+            self::assertSame(0, $c->decimales);
+            foreach ($c->lineas as $l) {
+                self::assertIsInt($l->montoItem, $doc->getId().' línea '.$l->numero);
+                self::assertIsInt($l->descuentoMonto);
+                self::assertIsInt($l->recargoMonto);
+            }
+            foreach ($c->descuentosGlobales as $g) {
+                self::assertIsInt($g->monto);
+            }
+            $t = $c->totales;
+            self::assertIsInt($t->montoTotal, $doc->getId());
+            foreach ([$t->montoNeto, $t->montoExento, $t->iva] as $v) {
+                self::assertTrue($v === null || \is_int($v), $doc->getId());
+            }
+        }
+        // Decimales sólo en exportación (moneda extranjera) y en OtraMoneda.
+        $exp = $this->calculator->calculate(Documents::exportacion());
+        self::assertSame(2, $exp->decimales);
+        self::assertIsFloat($exp->totales->montoTotal);
+        $otra = $this->calculator->calculate(Documents::facturaOtraMonedaEImpuestos())->otraMoneda;
+        self::assertIsFloat($otra?->montoTotal);
+    }
+
+    public function testDiferenciaDeRedondeoIndicaLaLinea(): void
+    {
+        $dte = Dte::factura()
+            ->addDetalle(Detail::create('Tornillo', 3, 33.5))       // 100,5 → 101
+            ->addDetalle(Detail::create('Tuerca', 7, 14.3))         // 100,1 → 100
+            ->setMontoTotalEsperado(240);                            // el ERP no redondeó por línea
+        $c = $this->calculator->calculate($dte);
+        self::assertSame(201, $c->totales->montoNeto);
+        self::assertSame(38, $c->totales->iva);
+        self::assertSame(239, $c->totales->montoTotal);
+        self::assertCount(1, $c->diferencias);
+        $msg = $c->diferencias[0];
+        self::assertStringContainsString('diferencia 1', $msg);
+        self::assertStringContainsString('Línea 1 "Tornillo": 3 × 33.5 = 100.5, redondeado a 101', $msg);
+        self::assertStringContainsString('Línea 2 "Tuerca": 7 × 14.3 = 100.1, redondeado a 100', $msg);
+
+        // ERP que calcula el IVA por línea: 2 × round(50 × 19%) = 20, el SII usa round(100 × 19%) = 19.
+        $iva = Dte::factura()->addDetalle(Detail::create('A', 1, 50))->addDetalle(Detail::create('B', 1, 50))->setMontoTotalEsperado(120);
+        $msg = $this->calculator->calculate($iva)->diferencias[0];
+        self::assertStringContainsString('IVA por línea = 20, pero el SII calcula el IVA sobre el neto total = 19', $msg);
+    }
 }

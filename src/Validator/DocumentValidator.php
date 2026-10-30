@@ -19,6 +19,7 @@ use RoyaltyFusion\Sii\Model\DocumentType;
 use RoyaltyFusion\Sii\Model\Dte;
 use RoyaltyFusion\Sii\Model\GlobalDiscount;
 use RoyaltyFusion\Sii\Model\Transport;
+use RoyaltyFusion\Sii\Util\Clock;
 use RoyaltyFusion\Sii\Util\Rut;
 
 /**
@@ -37,7 +38,7 @@ final class DocumentValidator
 
     public function validate(AbstractDocument $document, ?Caf $caf = null, ?Environment $environment = null, bool $checkCaf = false, ?\DateTimeInterface $now = null): ValidationResult
     {
-        $now = \DateTimeImmutable::createFromInterface($now ?? new \DateTimeImmutable('now', new \DateTimeZone('America/Santiago')));
+        $now = $now === null ? Clock::now() : Clock::toChile($now);
         $result = new ValidationResult();
         $r = new Rules($result);
         $tipo = $document->getTipo();
@@ -45,7 +46,7 @@ final class DocumentValidator
 
         $r->int('Encabezado.IdDoc.Folio', $document->getFolio(), 1, 9_999_999_999, true);
         $r->date('Encabezado.IdDoc.FchEmis', $document->getFechaEmision(), true);
-        $hoy = $now->setTimezone(new \DateTimeZone('America/Santiago'));
+        $hoy = $now;
         if ($document->getFechaEmision() !== null && $document->getFechaEmision()->format('Y-m-d') > $hoy->format('Y-m-d')) {
             $result->warning('Encabezado.IdDoc.FchEmis', 'La fecha de emisión es posterior a la fecha actual.', 'FECHA_FUTURA');
         }
@@ -175,6 +176,17 @@ final class DocumentValidator
         }
         $r->rut($p.'RUTRecep', $receptor->getRut(), true);
         $generico = $this->isRutGenerico($receptor);
+        if ($receptor->isConsumidorFinal() && !$document instanceof Boleta) {
+            $referenciaBoleta = false;
+            foreach ($document->getReferencias() as $ref) {
+                $referenciaBoleta = $referenciaBoleta || \in_array($ref->getTipoDocumento(), ['39', '41'], true);
+            }
+            if ($tipo->isExportacion()) {
+                $r->error($p.'RUTRecep', 'En exportación el receptor extranjero se identifica con RUT 55555555-5, no con el de consumidor final.', 'CONSUMIDOR_FINAL');
+            } elseif (!$tipo->isNota() || !$referenciaBoleta) {
+                $r->error($p.'RUTRecep', 'El RUT 66666666-6 (consumidor final) sólo se admite en boletas y en notas de crédito/débito que referencian una boleta.', 'CONSUMIDOR_FINAL');
+            }
+        }
         if ($document instanceof Boleta) {
             $r->text($p.'RznSocRecep', $receptor->getRazonSocial(), 100);
             $r->text($p.'TelefonoRecep', $receptor->getTelefono(), 20);

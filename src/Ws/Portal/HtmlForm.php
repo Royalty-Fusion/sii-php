@@ -38,7 +38,11 @@ final class HtmlForm
         return $this->fields[$field] ?? null;
     }
 
-    /** Botón a usar para avanzar en el flujo (evita "Volver", "Cancelar", etc.). */
+    /**
+     * Botón a usar para avanzar en el flujo (evita "Volver", "Cancelar", etc.).
+     *
+     * @return array{name: string, value: string}|null
+     */
     public function primaryButton(): ?array
     {
         foreach ($this->buttons as $button) {

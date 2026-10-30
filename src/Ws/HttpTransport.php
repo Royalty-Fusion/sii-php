@@ -7,6 +7,8 @@ namespace RoyaltyFusion\Sii\Ws;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RoyaltyFusion\Sii\Exception\WebServiceException;
+use RoyaltyFusion\Sii\Util\RedactingLogger;
+use RoyaltyFusion\Sii\Util\Redactor;
 use Symfony\Component\HttpClient\HttpClient;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
@@ -29,16 +31,21 @@ final class HttpTransport
         private readonly int $retries = 3,
         private readonly float $timeout = 60.0,
         private readonly int $retryDelayMs = 1000,
+        ?Redactor $redactor = null,
     ) {
         $this->client = $client ?? HttpClient::create();
-        $this->logger = $logger ?? new NullLogger();
+        // Todo lo que se registra pasa por el Redactor (token, semilla firmada, firmas, claves).
+        $this->logger = $logger === null ? new NullLogger() : ($logger instanceof RedactingLogger ? $logger : new RedactingLogger($logger, $redactor ?? new Redactor()));
     }
 
     /**
      * @param array<string, mixed> $options opciones de Symfony HttpClient (headers, body, query)
      */
-    public function request(string $method, string $url, array $options = []): HttpResponse
+    public function request(string $method, string $url, array $options = [], bool $retry = true): HttpResponse
     {
+        // Las operaciones no idempotentes (upload de sobres) no se reintentan: un reintento podría
+        // duplicar el envío. Ante un error se informa y el llamador decide (ver UploadUncertainException).
+        $retries = $retry ? $this->retries : 0;
         $options['timeout'] ??= $this->timeout;
         $options['headers'] = array_merge(['User-Agent' => self::USER_AGENT], $options['headers'] ?? []);
         $attempt = 0;
@@ -50,8 +57,8 @@ final class HttpTransport
                 $status = $response->getStatusCode();
                 $body = $response->getContent(false);
                 $headers = $response->getHeaders(false);
-                $this->logger->debug('SII response {status} {url}', ['status' => $status, 'url' => $url, 'body' => mb_substr($body, 0, 2000)]);
-                if ($status >= 500 && $attempt <= $this->retries) {
+                $this->logger->debug('SII response {status} {url}', ['status' => $status, 'url' => $url, 'body' => $body]);
+                if ($status >= 500 && $attempt <= $retries) {
                     $this->wait($attempt);
                     continue;
                 }
@@ -59,7 +66,7 @@ final class HttpTransport
                 return new HttpResponse($status, $body, $headers);
             } catch (TransportExceptionInterface $e) {
                 $this->logger->warning('Error de comunicación con el SII: {error}', ['error' => $e->getMessage(), 'url' => $url]);
-                if ($attempt > $this->retries) {
+                if ($attempt > $retries) {
                     throw new WebServiceException(sprintf('No fue posible comunicarse con el SII (%s): %s', $url, $e->getMessage()), null, null, null, $e);
                 }
                 $this->wait($attempt);

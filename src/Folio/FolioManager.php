@@ -29,7 +29,7 @@ final class FolioManager
         private readonly ?Environment $environment = null,
         ?\Closure $clock = null,
     ) {
-        $this->clock = $clock ?? static fn () => new \DateTimeImmutable('now', new \DateTimeZone('America/Santiago'));
+        $this->clock = \RoyaltyFusion\Sii\Util\Clock::wrap($clock);
     }
 
     /**

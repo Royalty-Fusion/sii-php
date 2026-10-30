@@ -51,12 +51,12 @@ final class XmlSignatureVerifier
 
     private function verifySignature(\DOMDocument $doc, \DOMXPath $xpath, \DOMElement $signature): SignatureCheck
     {
-        $reference = $xpath->query('ds:SignedInfo/ds:Reference', $signature)?->item(0);
-        $digestNode = $xpath->query('ds:SignedInfo/ds:Reference/ds:DigestValue', $signature)?->item(0);
-        $signedInfo = $xpath->query('ds:SignedInfo', $signature)?->item(0);
-        $valueNode = $xpath->query('ds:SignatureValue', $signature)?->item(0);
-        $certNode = $xpath->query('ds:KeyInfo/ds:X509Data/ds:X509Certificate', $signature)?->item(0);
-        $modulusNode = $xpath->query('ds:KeyInfo/ds:KeyValue/ds:RSAKeyValue/ds:Modulus', $signature)?->item(0);
+        $reference = XmlUtil::first($xpath, 'ds:SignedInfo/ds:Reference', $signature);
+        $digestNode = XmlUtil::first($xpath, 'ds:SignedInfo/ds:Reference/ds:DigestValue', $signature);
+        $signedInfo = XmlUtil::first($xpath, 'ds:SignedInfo', $signature);
+        $valueNode = XmlUtil::first($xpath, 'ds:SignatureValue', $signature);
+        $certNode = XmlUtil::first($xpath, 'ds:KeyInfo/ds:X509Data/ds:X509Certificate', $signature);
+        $modulusNode = XmlUtil::first($xpath, 'ds:KeyInfo/ds:KeyValue/ds:RSAKeyValue/ds:Modulus', $signature);
         if (!$reference instanceof \DOMElement || $digestNode === null || $signedInfo === null || $valueNode === null) {
             return new SignatureCheck('', false, false, 'Firma incompleta.');
         }
@@ -70,8 +70,11 @@ final class XmlSignatureVerifier
                 $copyXpath = XmlUtil::xpath($copy);
                 // Transformación enveloped-signature: se quita la firma evaluada.
                 $index = $this->indexOf($xpath, $signature);
-                $sig = $copyXpath->query('//ds:Signature')?->item($index);
-                $sig?->parentNode?->removeChild($sig);
+                $sigs = $copyXpath->query('//ds:Signature');
+                $sig = $sigs === false ? null : $sigs->item($index);
+                if ($sig instanceof \DOMNode) {
+                    $sig->parentNode?->removeChild($sig);
+                }
                 $target = $copy->documentElement;
             } else {
                 $target = XmlUtil::findById($doc, ltrim($uri, '#'));
@@ -91,7 +94,7 @@ final class XmlSignatureVerifier
             $publicKey = openssl_pkey_get_public($pem) ?: null;
         }
         if ($publicKey === null && $modulusNode !== null) {
-            $exponentNode = $xpath->query('ds:KeyInfo/ds:KeyValue/ds:RSAKeyValue/ds:Exponent', $signature)?->item(0);
+            $exponentNode = XmlUtil::first($xpath, 'ds:KeyInfo/ds:KeyValue/ds:RSAKeyValue/ds:Exponent', $signature);
             $publicKey = RsaKey::fromModulusExponent($modulusNode->textContent, $exponentNode?->textContent ?? 'AQAB');
         }
         if ($publicKey === null) {
@@ -106,7 +109,7 @@ final class XmlSignatureVerifier
     private function indexOf(\DOMXPath $xpath, \DOMElement $signature): int
     {
         $i = 0;
-        foreach ($xpath->query('//ds:Signature') ?: [] as $node) {
+        foreach (XmlUtil::elements($xpath, '//ds:Signature') as $node) {
             if ($node->isSameNode($signature)) {
                 return $i;
             }

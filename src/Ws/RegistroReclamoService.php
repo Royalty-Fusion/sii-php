@@ -8,6 +8,7 @@ use RoyaltyFusion\Sii\Exception\InvalidArgumentException;
 use RoyaltyFusion\Sii\Util\Rut;
 use RoyaltyFusion\Sii\Ws\Auth\TokenProviderInterface;
 use RoyaltyFusion\Sii\Ws\Result\ReclamoResult;
+use RoyaltyFusion\Sii\Xml\XmlUtil;
 
 /**
  * Registro de aceptación o reclamo de un DTE recibido (Ley 20.956), web service WsRegistroReclamoDte.
@@ -83,7 +84,7 @@ final class RegistroReclamoService
         $codigo = (int) trim((string) $xpath->evaluate('string(.//*[local-name()="codResp"])', $response));
         $descripcion = trim((string) $xpath->evaluate('string(.//*[local-name()="descResp"])', $response));
         $eventos = [];
-        foreach ($xpath->query('.//*[local-name()="listaEventosDoc"]', $response) ?: [] as $evento) {
+        foreach (XmlUtil::elements($xpath, './/*[local-name()="listaEventosDoc"]', $response) as $evento) {
             $get = static fn (string $n): string => trim((string) $xpath->evaluate(sprintf('string(./*[local-name()="%s"])', $n), $evento));
             $eventos[] = [
                 'codigo' => $get('codEvento'),

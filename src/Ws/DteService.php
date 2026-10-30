@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace RoyaltyFusion\Sii\Ws;
 
 use RoyaltyFusion\Sii\Exception\AuthenticationException;
+use RoyaltyFusion\Sii\Exception\UploadUncertainException;
 use RoyaltyFusion\Sii\Exception\WebServiceException;
+use RoyaltyFusion\Sii\Util\Clock;
 use RoyaltyFusion\Sii\Util\Rut;
 use RoyaltyFusion\Sii\Ws\Auth\TokenProviderInterface;
 use RoyaltyFusion\Sii\Ws\Result\DteStatus;
@@ -40,7 +42,7 @@ final class DteService
     {
         $sender = Rut::parse($rutEnvia);
         $company = Rut::parse($rutEmisor);
-        $fileName ??= sprintf('EnvioDTE_%d_%s.xml', $company->number, date('YmdHis'));
+        $fileName ??= sprintf('EnvioDTE_%d_%s.xml', $company->number, Clock::now()->format('YmdHis'));
         [$contentType, $body] = Multipart::build([
             'rutSender' => (string) $sender->number,
             'dvSender' => $sender->dv,
@@ -49,28 +51,32 @@ final class DteService
         ], 'archivo', $fileName, $xml);
 
         $token = $this->tokens->getToken();
-        $response = $this->http->request('POST', $this->endpoints->upload, [
+        try {
+            $response = $this->http->request('POST', $this->endpoints->upload, [
             'headers' => [
-                'Content-Type' => $contentType,
-                'Cookie' => 'TOKEN='.$token,
-                'Accept' => 'image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, application/vnd.ms-powerpoint, application/ms-excel, application/msword, */*',
-                'Accept-Language' => 'es-cl',
-                'Referer' => $this->endpoints->upload,
-            ],
-            'body' => $body,
-        ]);
+                    'Content-Type' => $contentType,
+                    'Cookie' => 'TOKEN='.$token,
+                    'Accept' => 'image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, application/vnd.ms-powerpoint, application/ms-excel, application/msword, */*',
+                    'Accept-Language' => 'es-cl',
+                    'Referer' => $this->endpoints->upload,
+                ],
+                'body' => $body,
+            ], false);
+        } catch (WebServiceException $e) {
+            throw new UploadUncertainException('Se perdió la comunicación con el SII durante el envío; no se sabe si el sobre fue recibido. Reconcilie antes de reenviar.', null, null, null, $e);
+        }
 
         try {
             $doc = XmlUtil::load(trim($response->body));
         } catch (\Throwable $e) {
-            throw new WebServiceException(sprintf('Respuesta inesperada del upload del SII (HTTP %d).', $response->status), null, $response->body, $response->status, $e);
+            throw new UploadUncertainException(sprintf('Respuesta inesperada del upload del SII (HTTP %d); no se sabe si el sobre fue recibido.', $response->status), null, $response->body, $response->status, $e);
         }
         $xpath = new \DOMXPath($doc);
         $status = trim($xpath->evaluate('string(//STATUS)'));
         $trackId = trim($xpath->evaluate('string(//TRACKID)'));
         $errors = [];
         foreach ($xpath->query('//DETAIL/ERROR') ?: [] as $error) {
-            $errors[] = trim($error->textContent);
+            $errors[] = trim(XmlUtil::text($error));
         }
 
         if ($status === '5' && $retryOnAuthError) {
@@ -90,6 +96,9 @@ final class DteService
             rawResponse: $response->body,
             receivedAt: trim($xpath->evaluate('string(//TIMESTAMP)')) ?: null,
             errors: $errors,
+            rutEmisor: (string) $company,
+            rutEnvia: (string) $sender,
+            boleta: false,
         );
     }
 

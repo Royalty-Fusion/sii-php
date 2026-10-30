@@ -47,27 +47,75 @@ final class EnvioStatus
         return $this->glosa ?? (self::ESTADOS[$this->estado ?? ''] ?? (string) $this->estado);
     }
 
-    /** El SII terminó de procesar el envío (aceptado o rechazado). */
+    /** El SII terminó de procesar el envío (aceptado, con reparos o rechazado). */
     public function isFinal(): bool
     {
-        return \in_array($this->estado, self::FINALES_OK, true) || $this->isRejected();
+        return \in_array($this->estado, self::FINALES_OK, true) || \in_array($this->estado, self::FINALES_RECHAZO, true);
     }
 
-    /** Envío rechazado completo. */
-    public function isRejected(): bool
+    /** Aún en proceso (REC, SOK, CRT, FOK, PDR) o el SII todavía no informa el envío: volver a consultar. */
+    public function isPending(): bool
     {
-        return \in_array($this->estado, self::FINALES_RECHAZO, true);
+        return !$this->isFinal();
     }
 
-    /** Envío procesado y todos sus documentos aceptados (con o sin reparos). */
+    /** La consulta misma falló (código negativo o numérico, ej. -11): reintentar la consulta más tarde. */
+    public function isQueryError(): bool
+    {
+        return $this->estado !== null && preg_match('/^-?\d+$/', $this->estado) === 1;
+    }
+
+    /** Procesado y todos los documentos aceptados sin reparos. */
     public function isAccepted(): bool
     {
-        return \in_array($this->estado, self::FINALES_OK, true) && $this->getTotal('rechazados') === 0;
+        return $this->isProcesado() && $this->getTotal('rechazados') === 0 && !$this->hasReparos();
+    }
+
+    /** Procesado, sin rechazos, pero con reparos (el documento es válido; revisar las observaciones). */
+    public function isAcceptedWithObjections(): bool
+    {
+        return $this->isProcesado() && $this->getTotal('rechazados') === 0 && $this->hasReparos();
+    }
+
+    /**
+     * Rechazado completo: error de schema, firma o carátula (RSC, RFR, RCT, RCH), o procesado con
+     * todos sus documentos rechazados. Los folios rechazados NO quedan usados en el SII.
+     */
+    public function isRejected(): bool
+    {
+        if (\in_array($this->estado, self::FINALES_RECHAZO, true)) {
+            return true;
+        }
+
+        return $this->isProcesado() && $this->getTotal('rechazados') > 0 && $this->getTotal('aceptados') === 0 && $this->getTotal('reparos') === 0;
+    }
+
+    /** Procesado con algunos documentos aceptados y otros rechazados: revisar cada documento. */
+    public function isPartiallyRejected(): bool
+    {
+        return $this->isProcesado() && $this->getTotal('rechazados') > 0 && ($this->getTotal('aceptados') > 0 || $this->getTotal('reparos') > 0);
     }
 
     public function hasReparos(): bool
     {
         return $this->estado === 'RPR' || $this->estado === 'RLV' || $this->getTotal('reparos') > 0;
+    }
+
+    /** Detalle de un documento rechazado o con reparos (sólo la API de boletas lo informa). */
+    public function getDocumento(int $tipoDte, int $folio): ?DocumentResult
+    {
+        foreach ($this->documentos as $documento) {
+            if ($documento->tipoDte === $tipoDte && $documento->folio === $folio) {
+                return $documento;
+            }
+        }
+
+        return null;
+    }
+
+    private function isProcesado(): bool
+    {
+        return \in_array($this->estado, self::FINALES_OK, true);
     }
 
     public function getTotal(string $campo): int

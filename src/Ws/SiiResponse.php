@@ -59,7 +59,9 @@ final class SiiResponse
         $out = [];
         $nodes = $this->xpath->query('//*[local-name()="RESP_BODY"]/*');
         foreach ($nodes ?: [] as $node) {
-            $out[] = [$node->localName ?? $node->nodeName, trim($node->textContent)];
+            if ($node instanceof \DOMElement) {
+                $out[] = [(string) $node->localName, trim($node->textContent)];
+            }
         }
 
         return $out;
@@ -87,6 +89,6 @@ final class SiiResponse
             return null;
         }
 
-        return trim((string) $nodes->item(0)?->textContent);
+        return trim(XmlUtil::text($nodes->item(0)));
     }
 }

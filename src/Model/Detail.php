@@ -43,6 +43,11 @@ class Detail
     private ?string $rutMandante = null;
     private float|int|null $montoItem = null;
 
+    /** Constructor final: permite los constructores estáticos con new static() de forma segura. */
+    final public function __construct()
+    {
+    }
+
     public static function create(string $nombre, float|int $cantidad, float|int $precio, ?string $unidad = null): static
     {
         return (new static())->setNombre($nombre)->setCantidad($cantidad)->setPrecio($precio)->setUnidad($unidad);

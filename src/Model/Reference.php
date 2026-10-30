@@ -27,6 +27,11 @@ class Reference
     private ?string $codigoVendedor = null;
     private ?string $codigoCaja = null;
 
+    /** Constructor final: permite los constructores estáticos con new static() de forma segura. */
+    final public function __construct()
+    {
+    }
+
     /**
      * @param string|int|DocumentType $tipoDocumento tipo de documento referenciado (33, 39, 801 = orden de compra, SET, HES, etc.)
      */

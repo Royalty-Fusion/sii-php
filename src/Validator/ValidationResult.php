@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace RoyaltyFusion\Sii\Validator;
 
-/** Conjunto de errores y advertencias de una validación. */
+/**
+ * Conjunto de errores y advertencias de una validación.
+ *
+ * @implements \IteratorAggregate<int, Violation>
+ */
 final class ValidationResult implements \Countable, \IteratorAggregate
 {
     /** @var list<Violation> */

@@ -7,7 +7,10 @@ namespace RoyaltyFusion\Sii\Intercambio;
 /** Sobre EnvioDTE recibido de un proveedor (intercambio entre contribuyentes). */
 final class ReceivedEnvelope
 {
-    /** @param list<ReceivedDte> $documentos */
+    /**
+     * @param list<ReceivedDte> $documentos
+     * @param list<string>      $erroresSchema
+     */
     public function __construct(
         public readonly string $setId,
         public readonly string $rutEmisor,
@@ -20,7 +23,6 @@ final class ReceivedEnvelope
         public readonly ?string $digest,
         public readonly array $documentos,
         public readonly bool $schemaValido,
-        /** @var list<string> */
         public readonly array $erroresSchema = [],
     ) {
     }

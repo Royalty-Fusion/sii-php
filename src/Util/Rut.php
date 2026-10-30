@@ -84,6 +84,12 @@ final class Rut implements \Stringable
         };
     }
 
+    /** RUT genérico 66666666-6 (boletas sin receptor identificado). */
+    public static function isConsumidorFinal(string $rut): bool
+    {
+        return self::isValid($rut) && self::normalize($rut) === self::CONSUMIDOR_FINAL;
+    }
+
     public function format(bool $withDots = false): string
     {
         $num = $withDots ? number_format($this->number, 0, ',', '.') : (string) $this->number;

@@ -6,13 +6,13 @@ namespace RoyaltyFusion\Sii\Bridge\Symfony;
 
 use RoyaltyFusion\Sii\Caf\CafRepositoryInterface;
 use RoyaltyFusion\Sii\Caf\InMemoryCafRepository;
-use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Environment;
 use RoyaltyFusion\Sii\Folio\FileFolioStore;
 use RoyaltyFusion\Sii\Folio\FolioStoreInterface;
 use RoyaltyFusion\Sii\Model\Company;
 use RoyaltyFusion\Sii\Model\Resolution;
 use RoyaltyFusion\Sii\See;
+use RoyaltyFusion\Sii\SeeConfig;
 use RoyaltyFusion\Sii\SeeFactory;
 use RoyaltyFusion\Sii\Validator\DocumentValidator;
 use RoyaltyFusion\Sii\Validator\XsdValidator;
@@ -72,6 +72,8 @@ final class SiiBundle extends AbstractBundle
                 ->scalarNode('caf_repository')->defaultNull()->info('Servicio que implementa CafRepositoryInterface (reemplaza caf_directory).')->end()
                 ->scalarNode('folio_store')->defaultNull()->info('Servicio que implementa FolioStoreInterface (registro del último folio usado).')->end()
                 ->scalarNode('folio_file')->defaultNull()->info('Archivo JSON para registrar folios (FileFolioStore) si no se indica folio_store.')->end()
+                ->scalarNode('oficina_sii')->defaultNull()->info('Oficina del SII impresa en la representación (ej. "Santiago Oriente").')->end()
+                ->booleanNode('folio_service')->defaultFalse()->info('Habilita SiiFolioService (experimental: automatiza el formulario web de timbraje).')->end()
                 ->scalarNode('token_cache')->defaultNull()->info('Servicio PSR-6 (ej. cache.app).')->end()
                 ->integerNode('token_ttl')->defaultValue(1800)->min(60)->end()
                 ->scalarNode('http_client')->defaultValue('http_client')->end()
@@ -103,15 +105,6 @@ final class SiiBundle extends AbstractBundle
         $services = $container->services();
         $optional = static fn (?string $id): ?Reference => $id === null ? null : new Reference($id, ContainerInterface::NULL_ON_INVALID_REFERENCE);
 
-        $folioStore = null;
-        if (isset($config['folio_store'])) {
-            $folioStore = new Reference($config['folio_store']);
-        } elseif (isset($config['folio_file'])) {
-            $services->set(FileFolioStore::class)->args([$config['folio_file']]);
-            $services->alias(FolioStoreInterface::class, FileFolioStore::class)->public();
-            $folioStore = new Reference(FileFolioStore::class);
-        }
-
         $services->set(SeeFactory::class)
             ->args([
                 Environment::fromString($config['environment']),
@@ -121,7 +114,6 @@ final class SiiBundle extends AbstractBundle
                 $config['token_ttl'],
                 $config['retries'],
                 $config['timeout'],
-                $folioStore,
             ])
             ->public();
 
@@ -139,24 +131,33 @@ final class SiiBundle extends AbstractBundle
         }
 
         if (!isset($config['certificate'])) {
+            // Multiempresa: el ERP crea cada See con SeeFactory::create(SeeConfig).
             return;
         }
 
-        $services->set('sii.certificate', Certificate::class)
-            ->factory([Certificate::class, 'fromFile'])
-            ->args([$config['certificate']['path'], $config['certificate']['password']]);
+        // Configuración de la empresa única (aplicaciones de una sola empresa).
+        $seeConfig = $services->set('sii.config', SeeConfig::class)
+            ->factory([SeeConfig::class, 'fromFile'])
+            ->args([$config['certificate']['path'], $config['certificate']['password']])
+            ->call('withCafRepository', [new Reference(CafRepositoryInterface::class)], true);
 
-        $resolution = null;
         if (isset($config['resolution'])) {
             $services->set('sii.resolution', Resolution::class)->args([(string) $config['resolution']['date'], $config['resolution']['number']]);
-            $resolution = new Reference('sii.resolution');
+            $seeConfig->call('withResolution', [new Reference('sii.resolution')], true);
         }
-
-        $see = $services->set(See::class)
-            ->factory([new Reference(SeeFactory::class), 'create'])
-            ->args([new Reference('sii.certificate'), $resolution, new Reference(CafRepositoryInterface::class)])
-            ->public();
-
+        if (isset($config['folio_store'])) {
+            $seeConfig->call('withFolioStore', [new Reference($config['folio_store'])], true);
+        } elseif (isset($config['folio_file'])) {
+            $services->set(FileFolioStore::class)->args([$config['folio_file']]);
+            $services->alias(FolioStoreInterface::class, FileFolioStore::class)->public();
+            $seeConfig->call('withFolioStore', [new Reference(FileFolioStore::class)], true);
+        }
+        if (isset($config['oficina_sii'])) {
+            $seeConfig->call('withOficinaSii', [$config['oficina_sii']], true);
+        }
+        if ($config['folio_service']) {
+            $seeConfig->call('withFolioService', [true], true);
+        }
         if (isset($config['company'])) {
             $c = $config['company'];
             $services->set('sii.company', Company::class)
@@ -170,7 +171,12 @@ final class SiiBundle extends AbstractBundle
                 ->call('setEmail', [$c['email']])
                 ->call('setTelefonos', [$c['telefonos']])
                 ->call('setCodigoSucursal', [$c['codigo_sucursal']]);
-            $see->call('setCompany', [new Reference('sii.company')]);
+            $seeConfig->call('withCompany', [new Reference('sii.company')], true);
         }
+
+        $services->set(See::class)
+            ->factory([new Reference(SeeFactory::class), 'create'])
+            ->args([new Reference('sii.config')])
+            ->public();
     }
 }
