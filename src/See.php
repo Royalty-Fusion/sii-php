@@ -11,6 +11,10 @@ use RoyaltyFusion\Sii\Caf\InMemoryCafRepository;
 use RoyaltyFusion\Sii\Calculator\TotalsCalculator;
 use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Exception\InvalidArgumentException;
+use RoyaltyFusion\Sii\Folio\FolioManager;
+use RoyaltyFusion\Sii\Folio\FolioStoreInterface;
+use RoyaltyFusion\Sii\Folio\InMemoryFolioStore;
+use RoyaltyFusion\Sii\Folio\SiiFolioService;
 use RoyaltyFusion\Sii\Model\AbstractDocument;
 use RoyaltyFusion\Sii\Model\Boleta;
 use RoyaltyFusion\Sii\Model\Company;
@@ -53,6 +57,11 @@ final class See
     private ?DteService $dteService = null;
     private ?BoletaService $boletaService = null;
     private ?RegistroReclamoService $reclamoService = null;
+    private ?FolioManager $folioManager = null;
+    private ?SiiFolioService $folioService = null;
+    private ?\Closure $clock;
+    private ?HttpClientInterface $httpClient;
+    private ?LoggerInterface $logger;
 
     public function __construct(
         private readonly Certificate $certificate,
@@ -73,6 +82,9 @@ final class See
         $this->soap = new SoapClient($this->http);
         $this->tokenStorage = $tokenStorage ?? new InMemoryTokenStorage();
         $this->emitter = new Emitter($certificate, $this->cafs, $environment, clock: $clock);
+        $this->clock = $clock;
+        $this->httpClient = $httpClient;
+        $this->logger = $logger;
     }
 
     public function getEnvironment(): Environment
@@ -141,10 +153,56 @@ final class See
         return $this->emitter->validate($this->withCompany($document));
     }
 
-    /** Valida, timbra y firma el documento. */
+    /**
+     * Valida, timbra y firma el documento.
+     *
+     * Si el documento no tiene folio, se asigna el siguiente disponible (ver getFolioManager());
+     * si la emisión falla, el folio se libera.
+     */
     public function prepare(AbstractDocument $document): PreparedDocument
     {
-        return $this->emitter->prepare($this->withCompany($document));
+        $document = $this->withCompany($document);
+        if ($document->getFolio() !== null) {
+            return $this->emitter->prepare($document);
+        }
+        $rut = $document->getEmisor()?->getRut() ?? throw new InvalidArgumentException('El documento no tiene emisor para asignar el folio.');
+        $folio = $this->getFolioManager()->next($rut, $document->getTipo());
+        $document->setFolio($folio);
+        try {
+            return $this->emitter->prepare($document);
+        } catch (\Throwable $e) {
+            $this->getFolioManager()->release($rut, $document->getTipo(), $folio);
+            $document->setFolio(null);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Registro de folios usados. Por defecto en memoria: en producción use FileFolioStore o
+     * una implementación sobre la base de datos del ERP.
+     */
+    public function setFolioStore(FolioStoreInterface $store): self
+    {
+        $this->folioManager = new FolioManager($this->cafs, $store, $this->environment, $this->clock);
+
+        return $this;
+    }
+
+    /** Asignación y consulta de folios disponibles en los CAF cargados. */
+    public function getFolioManager(): FolioManager
+    {
+        return $this->folioManager ??= new FolioManager($this->cafs, new InMemoryFolioStore(), $this->environment, $this->clock);
+    }
+
+    /**
+     * Timbraje electrónico en el sitio del SII (solicitar, consultar y reobtener CAF).
+     *
+     * EXPERIMENTAL: el SII no ofrece web service para esto; se automatizan los formularios web.
+     */
+    public function getFolioService(): SiiFolioService
+    {
+        return $this->folioService ??= new SiiFolioService($this->certificate, $this->environment, $this->httpClient, $this->logger);
     }
 
     /** XML del DTE firmado (ISO-8859-1), para almacenar o enviar al receptor. */

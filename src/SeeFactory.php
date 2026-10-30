@@ -8,6 +8,7 @@ use Psr\Cache\CacheItemPoolInterface;
 use Psr\Log\LoggerInterface;
 use RoyaltyFusion\Sii\Caf\CafRepositoryInterface;
 use RoyaltyFusion\Sii\Certificate\Certificate;
+use RoyaltyFusion\Sii\Folio\FolioStoreInterface;
 use RoyaltyFusion\Sii\Model\Resolution;
 use RoyaltyFusion\Sii\Ws\Auth\InMemoryTokenStorage;
 use RoyaltyFusion\Sii\Ws\Auth\Psr6TokenStorage;
@@ -23,6 +24,8 @@ final class SeeFactory
 {
     private readonly TokenStorageInterface $tokenStorage;
     private readonly HttpTransport $transport;
+    private readonly ?LoggerInterface $logger;
+    private readonly ?HttpClientInterface $httpClient;
 
     public function __construct(
         private readonly Environment $defaultEnvironment = Environment::CERTIFICACION,
@@ -32,13 +35,16 @@ final class SeeFactory
         private readonly int $tokenTtl = 1800,
         int $retries = 3,
         float $timeout = 60.0,
+        private readonly ?FolioStoreInterface $folioStore = null,
     ) {
+        $this->httpClient = $httpClient;
         $this->tokenStorage = match (true) {
             $tokenStorage instanceof TokenStorageInterface => $tokenStorage,
             $tokenStorage instanceof CacheItemPoolInterface => new Psr6TokenStorage($tokenStorage),
             default => new InMemoryTokenStorage(),
         };
         $this->transport = new HttpTransport($httpClient, $logger, $retries, $timeout);
+        $this->logger = $logger;
     }
 
     public function create(
@@ -47,15 +53,22 @@ final class SeeFactory
         ?CafRepositoryInterface $cafs = null,
         ?Environment $environment = null,
     ): See {
-        return new See(
+        $see = new See(
             $certificate,
             $environment ?? $this->defaultEnvironment,
             $resolution,
             $cafs,
+            httpClient: $this->httpClient,
             tokenStorage: $this->tokenStorage,
+            logger: $this->logger,
             transport: $this->transport,
             tokenTtl: $this->tokenTtl,
         );
+        if ($this->folioStore !== null) {
+            $see->setFolioStore($this->folioStore);
+        }
+
+        return $see;
     }
 
     /** Atajo: carga el certificado desde un archivo .pfx/.p12. */

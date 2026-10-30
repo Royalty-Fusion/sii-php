@@ -32,6 +32,7 @@ intermediarios. Su diseño sigue el estilo de [Greenter](https://github.com/theg
 |---|---|---|
 | Certificado digital | `Certificate\Certificate` | Lee `.pfx`/`.p12` (también los cifrados con RC2-40/3DES vía `openssl -legacy`), obtiene RUT del titular, módulo/exponente, vigencia. |
 | CAF y timbre | `Caf\Caf`, `Caf\InMemoryCafRepository`, `Xml\Builder\TedBuilder` | Parsea el CAF, verifica que la clave RSASK corresponda a RSAPK, rango, vencimiento (6 meses), ambiente (IDK 100) y estampa el TED (firma SHA1withRSA del DD). |
+| Folios | `Folio\FolioManager`, `Folio\FileFolioStore`, `Folio\SiiFolioService` | Asignación atómica del siguiente folio, consulta de disponibles y vencimientos, y solicitud/reobtención de CAF en el sitio del SII (experimental). |
 | Modelos | `Model\Dte`, `Model\Boleta`, `Model\Company`, `Model\Client`, `Model\Detail`, … | Representan el documento con la terminología del SII. |
 | Cálculo | `Calculator\TotalsCalculator` | Calcula MontoItem, descuentos/recargos, neto, exento, IVA, impuestos adicionales y retenciones, montos brutos, otra moneda. |
 | Validación | `Validator\DocumentValidator`, `Validator\XsdValidator` | Reglas de negocio del formato DTE + validación contra el XSD oficial. |
@@ -209,6 +210,52 @@ $see->sendXml($sobreGuardado, '76123456-7');               // reenvío de un sob
 $see->getDocumentStatus($prepared);        // QueryEstDte / estado de boleta
 ```
 
+### Folios: consultar, asignar y obtener
+
+**Consultar y asignar folios** a partir de los CAF cargados (sin conectarse al SII):
+
+```php
+use RoyaltyFusion\Sii\Folio\FileFolioStore;
+
+// Registro del último folio usado. FileFolioStore usa bloqueo de archivo (seguro entre procesos del
+// mismo servidor); en un ERP implemente FolioStoreInterface sobre su base de datos (SELECT ... FOR UPDATE).
+$see->setFolioStore(new FileFolioStore('/var/lib/erp/sii-folios.json'));
+$folios = $see->getFolioManager();
+
+$folios->setUltimoUsado('76123456-7', 33, 1520);   // al migrar desde otro sistema
+$folio = $folios->next('76123456-7', 33);          // reserva el siguiente folio (salta CAF vencidos o agotados)
+
+foreach ($folios->status('76123456-7', 33) as $caf) {
+    // $caf->desde, $caf->hasta, $caf->ultimoUsado, $caf->disponibles, $caf->getSiguiente(),
+    // $caf->fechaVencimiento, $caf->vencido
+}
+$folios->disponibles('76123456-7', 33);            // total utilizable
+$folios->requiereNuevoCaf('76123456-7', 33, 50);   // true si quedan menos de 50
+
+// Si el documento no trae folio, prepare()/send() asignan el siguiente automáticamente
+// y lo liberan si la emisión falla.
+$see->send(Dte::factura()->setReceptor($cliente)->addDetalle($detalle));
+```
+
+**Obtener folios del SII (EXPERIMENTAL).** El SII no ofrece un web service para pedir CAF: solo
+existe el formulario web de "Timbraje electrónico". `SiiFolioService` lo automatiza autenticándose con
+el certificado digital (debe tener permiso de timbraje para la empresa). Todo CAF descargado se valida
+(tipo, RUT, ambiente y par de claves) antes de retornarlo. Si el SII cambia sus formularios, se lanza una
+excepción con el mensaje de la página; nunca se retorna un CAF incorrecto.
+
+```php
+$sii = $see->getFolioService();
+
+$info = $sii->consultar('76123456-7', 33);         // no solicita nada: máximo autorizado, mensajes del SII
+$info->maximoAutorizado;
+
+$caf = $sii->solicitar('76123456-7', 33, 100);     // pide 100 folios y descarga el CAF
+file_put_contents("caf/33-{$caf->getFolioDesde()}.xml", $caf->getSource());
+$see->addCaf($caf);
+
+$caf = $sii->reobtener('76123456-7', 33, 1);       // vuelve a descargar un CAF ya timbrado
+```
+
 ### Representación impresa
 
 ```php
@@ -260,6 +307,7 @@ sii:
     resolution: { date: '2024-01-15', number: 0 }
     caf_directory: '%kernel.project_dir%/var/sii/caf'   # o caf_repository: App\Sii\DoctrineCafRepository
     token_cache: cache.app                               # comparte el token entre procesos/workers
+    folio_file: '%kernel.project_dir%/var/sii/folios.json'   # o folio_store: App\Sii\DoctrineFolioStore
     company:
         rut: 76123456-7
         razon_social: Mi Empresa SpA
@@ -288,7 +336,8 @@ final class FacturacionController
 ```
 
 Para almacenar los CAF en la base de datos del ERP implemente `Caf\CafRepositoryInterface`
-(método `find($rutEmisor, $tipoDte, $folio)`), y configure `caf_repository` con su servicio.
+(métodos `find($rutEmisor, $tipoDte, $folio)` y `findAll($rutEmisor, $tipoDte)`) y configure
+`caf_repository`; para el registro de folios implemente `Folio\FolioStoreInterface` y configure `folio_store`.
 
 ## Ambientes
 

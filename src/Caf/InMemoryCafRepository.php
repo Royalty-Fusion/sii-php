@@ -22,6 +22,11 @@ final class InMemoryCafRepository implements CafRepositoryInterface, \Countable
 
     public function add(Caf $caf): self
     {
+        foreach ($this->cafs as $existing) {
+            if ($existing->getRutEmisor() === $caf->getRutEmisor() && $existing->getTipoDte() === $caf->getTipoDte() && $existing->getFolioDesde() === $caf->getFolioDesde()) {
+                return $this; // el mismo CAF cargado dos veces
+            }
+        }
         $this->cafs[] = $caf;
 
         return $this;
@@ -52,6 +57,15 @@ final class InMemoryCafRepository implements CafRepositoryInterface, \Countable
         }
 
         return null;
+    }
+
+    public function findAll(string $rutEmisor, int $tipoDte): array
+    {
+        $rut = Rut::isValid($rutEmisor) ? Rut::normalize($rutEmisor) : $rutEmisor;
+        $cafs = array_values(array_filter($this->cafs, static fn (Caf $c) => $c->getTipoDte() === $tipoDte && $c->getRutEmisor() === $rut));
+        usort($cafs, static fn (Caf $a, Caf $b) => $a->getFolioDesde() <=> $b->getFolioDesde());
+
+        return $cafs;
     }
 
     /** @return list<Caf> */

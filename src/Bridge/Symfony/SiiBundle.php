@@ -8,6 +8,8 @@ use RoyaltyFusion\Sii\Caf\CafRepositoryInterface;
 use RoyaltyFusion\Sii\Caf\InMemoryCafRepository;
 use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Environment;
+use RoyaltyFusion\Sii\Folio\FileFolioStore;
+use RoyaltyFusion\Sii\Folio\FolioStoreInterface;
 use RoyaltyFusion\Sii\Model\Company;
 use RoyaltyFusion\Sii\Model\Resolution;
 use RoyaltyFusion\Sii\See;
@@ -33,6 +35,7 @@ use Symfony\Component\HttpKernel\Bundle\AbstractBundle;
  *     resolution: { date: '2024-01-15', number: 0 }
  *     caf_directory: '%kernel.project_dir%/var/sii/caf'
  *     token_cache: cache.app              # pool PSR-6 para compartir el token entre procesos
+ *     folio_file: '%kernel.project_dir%/var/sii/folios.json'   # o folio_store: App\Sii\DoctrineFolioStore
  *     company:
  *       rut: 76123456-7
  *       razon_social: Mi Empresa SpA
@@ -67,6 +70,8 @@ final class SiiBundle extends AbstractBundle
                 ->end()
                 ->scalarNode('caf_directory')->defaultNull()->end()
                 ->scalarNode('caf_repository')->defaultNull()->info('Servicio que implementa CafRepositoryInterface (reemplaza caf_directory).')->end()
+                ->scalarNode('folio_store')->defaultNull()->info('Servicio que implementa FolioStoreInterface (registro del último folio usado).')->end()
+                ->scalarNode('folio_file')->defaultNull()->info('Archivo JSON para registrar folios (FileFolioStore) si no se indica folio_store.')->end()
                 ->scalarNode('token_cache')->defaultNull()->info('Servicio PSR-6 (ej. cache.app).')->end()
                 ->integerNode('token_ttl')->defaultValue(1800)->min(60)->end()
                 ->scalarNode('http_client')->defaultValue('http_client')->end()
@@ -98,6 +103,15 @@ final class SiiBundle extends AbstractBundle
         $services = $container->services();
         $optional = static fn (?string $id): ?Reference => $id === null ? null : new Reference($id, ContainerInterface::NULL_ON_INVALID_REFERENCE);
 
+        $folioStore = null;
+        if (isset($config['folio_store'])) {
+            $folioStore = new Reference($config['folio_store']);
+        } elseif (isset($config['folio_file'])) {
+            $services->set(FileFolioStore::class)->args([$config['folio_file']]);
+            $services->alias(FolioStoreInterface::class, FileFolioStore::class)->public();
+            $folioStore = new Reference(FileFolioStore::class);
+        }
+
         $services->set(SeeFactory::class)
             ->args([
                 Environment::fromString($config['environment']),
@@ -107,6 +121,7 @@ final class SiiBundle extends AbstractBundle
                 $config['token_ttl'],
                 $config['retries'],
                 $config['timeout'],
+                $folioStore,
             ])
             ->public();
 

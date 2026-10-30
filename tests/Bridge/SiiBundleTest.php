@@ -43,6 +43,7 @@ final class SiiBundleTest extends TestCase
             'resolution' => ['date' => '2026-10-01', 'number' => 0],
             'caf_directory' => Fixtures::DIR.'/caf',
             'token_cache' => 'cache.app',
+            'folio_file' => sys_get_temp_dir().'/sii-bundle-folios-'.getmypid().'.json',
             'company' => [
                 'rut' => Fixtures::RUT_EMISOR,
                 'razon_social' => 'EMPRESA DE PRUEBA SPA',
@@ -62,6 +63,9 @@ final class SiiBundleTest extends TestCase
         $cafs = $container->get(CafRepositoryInterface::class);
         self::assertInstanceOf(CafRepositoryInterface::class, $cafs);
         self::assertNotNull($cafs->find(Fixtures::RUT_EMISOR, 33, 10));
+        self::assertInstanceOf(\RoyaltyFusion\Sii\Folio\FileFolioStore::class, $container->get(\RoyaltyFusion\Sii\Folio\FolioStoreInterface::class));
+        self::assertGreaterThan(0, $see->getFolioManager()->disponibles(Fixtures::RUT_EMISOR, 33));
+        @unlink(sys_get_temp_dir().'/sii-bundle-folios-'.getmypid().'.json');
     }
 
     public function testSoloFactory(): void

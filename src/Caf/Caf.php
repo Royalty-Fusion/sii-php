@@ -63,8 +63,11 @@ final class Caf
 
     public static function fromXml(string $xml): self
     {
+        // Los CAF del SII suelen declarar sólo version="1.0" aunque vengan en ISO-8859-1:
+        // se normaliza a UTF-8 sin declaración para que el parser no falle con tildes o eñes.
+        $utf8 = mb_check_encoding($xml, 'UTF-8') ? $xml : Text::toUtf8($xml);
         try {
-            $doc = XmlUtil::load(trim($xml));
+            $doc = XmlUtil::load(XmlUtil::stripDeclaration($utf8));
         } catch (\Throwable $e) {
             throw new CafException('El archivo CAF no es un XML válido: '.$e->getMessage(), 0, $e);
         }
@@ -90,8 +93,7 @@ final class Caf
         }
 
         // El nodo CAF debe incluirse en el TED exactamente como lo entregó el SII (sin espacios entre nodos).
-        $raw = mb_check_encoding($xml, 'UTF-8') ? $xml : Text::toUtf8($xml);
-        if (!preg_match('#<CAF\b[^>]*>.*</CAF>#s', $raw, $m)) {
+        if (!preg_match('#<CAF\b[^>]*>.*</CAF>#s', $utf8, $m)) {
             throw new CafException('No se encontró el nodo <CAF> en el archivo.');
         }
         $cafXml = (string) preg_replace('/>\s+</', '><', trim($m[0]));
