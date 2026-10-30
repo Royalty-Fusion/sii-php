@@ -154,7 +154,7 @@ final class RcvService
 
             throw new WebServiceException(sprintf('El RCV del SII respondió error %d: %s', $codigo, $mensaje), (string) $codigo, (string) json_encode($response));
         }
-        if ($rows === null || $rows === []) {
+        if ($rows === []) {
             return [];
         }
         if (!\is_array($rows) || !array_is_list($rows)) {

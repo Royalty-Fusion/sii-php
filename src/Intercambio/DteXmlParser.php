@@ -157,7 +157,7 @@ final class DteXmlParser
             if (($ch = XmlUtil::first($xpath, 'sii:Chofer', $tr)) !== null) {
                 $transporte->setChofer(new Driver((string) $s('sii:RUTChofer', $ch), (string) $s('sii:NombreChofer', $ch)));
             }
-            if (($ad = XmlUtil::first($xpath, 'sii:Aduana', $tr)) !== null) {
+            if (($ad = XmlUtil::first($xpath, 'sii:Aduana', $tr)) instanceof \DOMElement) {
                 $transporte->setAduana($this->aduana($xpath, $ad, $s, $i, $n));
             }
             $dte->setTransporte($transporte);
