@@ -20,6 +20,7 @@ final class EnvioDteReader
     public function __construct(
         private readonly XsdValidator $xsd = new XsdValidator(),
         private readonly XmlSignatureVerifier $verifier = new XmlSignatureVerifier(),
+        private readonly DteXmlParser $parser = new DteXmlParser(),
     ) {
     }
 
@@ -65,6 +66,7 @@ final class EnvioDteReader
                 $int($v('sii:Encabezado/sii:Totales/sii:MntNeto')),
                 $int($v('sii:Encabezado/sii:Totales/sii:IVA')),
                 $int($v('sii:Encabezado/sii:Totales/sii:MntExe')),
+                $this->parseContenido($xpath, $node),
             );
         }
 
@@ -84,6 +86,15 @@ final class EnvioDteReader
             $schema->isValid(),
             array_map('strval', $schema->getErrors()),
         );
+    }
+
+    private function parseContenido(\DOMXPath $xpath, \DOMElement $node): ?ParsedDte
+    {
+        try {
+            return $this->parser->parseNode($xpath, $node);
+        } catch (\Throwable) {
+            return null; // un documento con datos inesperados no impide leer el resto del sobre
+        }
     }
 
     private static function fecha(string $ymd): \DateTimeImmutable

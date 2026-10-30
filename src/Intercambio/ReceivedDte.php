@@ -22,7 +22,37 @@ final class ReceivedDte
         public readonly ?int $montoNeto = null,
         public readonly ?int $iva = null,
         public readonly ?int $montoExento = null,
+        /** Contenido completo (líneas, referencias, impuestos, totales del emisor). */
+        public readonly ?ParsedDte $contenido = null,
     ) {
+    }
+
+    /** Documento completo como modelo del SDK (null si el tipo no está modelado). */
+    public function getDocumento(): ?\RoyaltyFusion\Sii\Model\Dte
+    {
+        return $this->contenido?->documento;
+    }
+
+    /** @return list<\RoyaltyFusion\Sii\Model\Detail> */
+    public function getDetalles(): array
+    {
+        return $this->contenido?->getDetalles() ?? [];
+    }
+
+    /** @return list<\RoyaltyFusion\Sii\Model\Reference> */
+    public function getReferencias(): array
+    {
+        return $this->contenido?->getReferencias() ?? [];
+    }
+
+    /**
+     * Referencias de un tipo, por ejemplo "801" (orden de compra) para conciliar con el ERP.
+     *
+     * @return list<\RoyaltyFusion\Sii\Model\Reference>
+     */
+    public function getReferenciasPorTipo(string|int $tipo): array
+    {
+        return $this->contenido?->getReferenciasPorTipo($tipo) ?? [];
     }
 
     public function getId(): string
