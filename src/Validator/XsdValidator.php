@@ -48,7 +48,7 @@ final class XsdValidator
         } catch (XmlException $e) {
             return $result->error('XML', $e->getMessage(), 'XML_MAL_FORMADO');
         }
-        $root = $doc->documentElement?->localName ?? '';
+        $root = $doc->documentElement->localName ?? '';
         $schema ??= self::SCHEMAS[$root] ?? null;
         if ($schema === null) {
             return $result->error('XML', sprintf('No hay un esquema XSD para el elemento raíz <%s>.', $root), 'XSD_DESCONOCIDO');

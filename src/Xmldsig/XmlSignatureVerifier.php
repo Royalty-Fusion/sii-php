@@ -95,7 +95,7 @@ final class XmlSignatureVerifier
         }
         if ($publicKey === null && $modulusNode !== null) {
             $exponentNode = XmlUtil::first($xpath, 'ds:KeyInfo/ds:KeyValue/ds:RSAKeyValue/ds:Exponent', $signature);
-            $publicKey = RsaKey::fromModulusExponent($modulusNode->textContent, $exponentNode?->textContent ?? 'AQAB');
+            $publicKey = RsaKey::fromModulusExponent($modulusNode->textContent, $exponentNode->textContent ?? 'AQAB');
         }
         if ($publicKey === null) {
             return new SignatureCheck($uri, $digestOk, false, 'Sin clave pública en KeyInfo.');
