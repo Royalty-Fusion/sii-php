@@ -39,7 +39,8 @@ intermediarios. Su diseño sigue el estilo de [Greenter](https://github.com/theg
 | Firma | `Xmldsig\XmlSigner`, `Xmldsig\XmlSignatureVerifier` | XMLDSig (C14N, RSA-SHA1, KeyValue + X509Certificate) del DTE, del sobre y de la semilla. |
 | Emisión | `Emitter`, `See` | Valida → calcula → timbra → firma → valida XSD → verifica firma → arma sobre. |
 | Web services | `Ws\DteService`, `Ws\BoletaService`, `Ws\RegistroReclamoService` | Semilla/token, upload `EnvioDTE`, `QueryEstUp`, `QueryEstDte`, `QueryEstDteAv`, API REST de boletas, aceptación/reclamo de DTE. |
-| Intercambio | `Intercambio\EnvioDteReader`, `Intercambio\ResponseBuilder` | Lee DTE de proveedores (verifica firma y timbre) y genera `RespuestaDTE` (recepción y resultado comercial) y `EnvioRecibos` (Ley 19.983). |
+| Compras e intercambio | `Intercambio\EnvioDteReader`, `Intercambio\DteXmlParser`, `Intercambio\ResponseBuilder` | Lee DTE de proveedores completos (líneas, referencias, impuestos; verifica firma y timbre) y genera `RespuestaDTE` y `EnvioRecibos` (Ley 19.983). |
+| RCV | `Rcv\RcvService`, `Rcv\RcvConciliacion` | Consulta del Registro de Compras y Ventas del SII y conciliación con el ERP (experimental, desactivado por defecto). |
 | Representación impresa | `Report\HtmlReport`, `Report\TimbreGenerator` | HTML del documento con el timbre PDF417 (nivel de corrección 5). |
 | Symfony / multiempresa | `Bridge\Symfony\SiiBundle`, `SeeFactory`, `SeeConfig` | Configuración por YAML, caché de tokens PSR-6, una configuración inmutable por empresa. |
 | Persistencia | `Pdo\PdoFolioStore`, `Pdo\PdoCafRepository` | Folios y CAF en MariaDB/MySQL/PostgreSQL/SQLite con `ext-pdo`. |
@@ -383,6 +384,73 @@ $html = (new HtmlReport())->render($prepared, [
 // Convierta a PDF con Dompdf, wkhtmltopdf o Chrome headless.
 ```
 
+### Compras: documentos recibidos de proveedores
+
+`EnvioDteReader` lee el sobre que envía el proveedor, verifica esquema, firmas y timbre, y entrega cada
+documento **completo** (como modelo `Dte`), listo para registrar la compra en el ERP:
+
+```php
+$envio = (new EnvioDteReader())->read($xmlRecibido);
+foreach ($envio->documentos as $dte) {
+    $dte->tipoDte; $dte->folio; $dte->rutEmisor; $dte->montoTotal;   // cabecera
+    $dte->firmaValida; $dte->timbreValido;
+
+    foreach ($dte->getDetalles() as $linea) {                         // líneas
+        $linea->getNombre(); $linea->getCantidad(); $linea->getPrecio(); $linea->getMontoItem();
+        $linea->getCodigos(); $linea->getImpuestosAdicionales(); $linea->isExento();
+    }
+    foreach ($dte->getReferenciasPorTipo('801') as $oc) {             // orden de compra del ERP
+        $oc->getFolio(); $oc->getFecha();
+    }
+    $dte->getReferenciasPorTipo('52');                                // guías de despacho
+    $dte->contenido?->totales;                                        // totales tal como los informó el proveedor
+    $dte->getDocumento()?->getEmisor()?->getGiro();                   // todo el documento
+}
+
+// Un DTE suelto (por ejemplo, guardado en la base de datos):
+$parsed = (new DteXmlParser())->parse($xmlDte);
+$parsed->documento;   // Dte
+$parsed->totales;     // Totals del emisor
+```
+
+Los tipos de referencia más usados en `TpoDocRef`: códigos de DTE (`33`, `52`, `61`…), `801` orden de compra,
+`802` nota de pedido, `803` contrato, `HES` hoja de entrada de servicios y `SET` (certificación). Al emitir se
+usa `Reference::create('801', 'OC-4512', $fecha, null, 'Orden de compra')`; con `setGlobal(true)` la referencia
+cubre un conjunto de documentos (por ejemplo, todas las guías del mes).
+
+### Registro de Compras y Ventas (RCV) y conciliación
+
+El RCV del SII lista **todas** las compras que proveedores emitieron al RUT de la empresa (también las que
+nunca llegaron por correo) y las ventas. `RcvService` lo consulta y `RcvConciliacion` lo cruza con el ERP.
+
+**Experimental y desactivado por defecto:** el SII no publica un web service oficial del RCV; se usan los
+servicios JSON de su sitio web (`www4.sii.cl/consdcvinternetui`) con sesión por certificado digital. El
+certificado debe tener acceso al RCV de la empresa. Consulta datos reales (producción) y sólo lee.
+
+```php
+use RoyaltyFusion\Sii\Rcv\{RcvConciliacion, RcvService};
+
+$rcv = $see->enableRcvService()->getRcvService();     // o SeeConfig::withRcvService()
+
+$rcv->resumen('76123456-7', '2026-10');               // totales por tipo de documento
+$compras = $rcv->compras('76123456-7', '2026-10');    // todas; o compras($rut, '202610', 33)
+$rcv->compras('76123456-7', '202610', null, RcvService::PENDIENTE);   // REGISTRO, PENDIENTE, NO_INCLUIR, RECLAMADO
+$rcv->ventas('76123456-7', '202610');
+
+foreach ($compras as $c) {
+    $c->tipoDte; $c->folio; $c->rutContraparte; $c->razonSocial; $c->fechaEmision;
+    $c->montoNeto; $c->montoIva; $c->montoTotal; $c->eventoReceptor; $c->raw;   // raw: fila original del SII
+}
+
+$resultado = (new RcvConciliacion())->conciliar($compras, $comprasDelErp);   // [['rut' =>, 'tipo' =>, 'folio' =>, 'monto_total' =>], ...]
+$resultado->soloEnSii;      // facturas de proveedores que el ERP no registró
+$resultado->soloEnErp;      // registradas en el ERP pero no en el SII
+$resultado->diferencias;    // mismo documento con distinto monto
+$resultado->isConciliado();
+```
+
+Si el SII cambia el servicio o la sesión no es válida, se lanza `WebServiceException` con la respuesta recibida.
+
 ### Intercambio con proveedores y aceptación/reclamo
 
 ```php
@@ -421,6 +489,7 @@ sii:
     caf_directory: '%kernel.project_dir%/var/sii/caf'   # o caf_repository: App\Sii\DoctrineCafRepository
     token_cache: cache.app                               # comparte el token entre procesos/workers
     folio_file: '%kernel.project_dir%/var/sii/folios.json'   # o folio_store: App\Sii\DoctrineFolioStore
+    rcv_service: false                                   # true habilita la consulta del RCV (experimental)
     company:
         rut: 76123456-7
         razon_social: Mi Empresa SpA
@@ -546,8 +615,8 @@ Todas implementan `RoyaltyFusion\Sii\Exception\SiiException`. Las respuestas de 
 
 Planificado para versiones siguientes:
 
-- Cesión de facturas (AEC), Libro de Guías y Liquidación-Factura (43).
-- Consulta del Registro de Compras y Ventas (RCV) para conciliación.
+- Cesión de facturas (AEC), Libro de Guías y Liquidación-Factura (43). Un DTE 43 recibido se lee con sus
+  totales, pero sin el modelo completo.
 
 No incluido: Consumo de Folios (RCOF), eliminado por el SII para boletas desde 2022, y el Libro de Compras y
 Ventas, reemplazado por el RCV que el SII construye a partir de los DTE recibidos.
@@ -575,7 +644,8 @@ vendor/bin/phpunit --testsuite certificacion
 
 Opcionales: `SII_RESOLUCION_NUMERO`, `SII_RUT_RECEPTOR`, `SII_RAZON_SOCIAL`, `SII_GIRO`, `SII_ACTECO`,
 `SII_DIRECCION`, `SII_COMUNA`, `SII_INTERCAMBIO_XML` (sobre de un tercero), `SII_ESPERA_SEGUNDOS` y
-`SII_FOLIO_STORE` (archivo con los folios ya usados; por defecto `SII_CAF_DIR/.folios-certificacion.json`).
+`SII_FOLIO_STORE` (archivo con los folios ya usados; por defecto `SII_CAF_DIR/.folios-certificacion.json`) y
+`SII_RCV_PERIODO`/`SII_RCV_RUT` para consultar el RCV (producción, sólo lectura).
 
 Los tests usan un certificado y CAF **ficticios** (`tests/Fixtures`) firmados con una clave "SII" falsa;
 no sirven para emitir documentos reales.

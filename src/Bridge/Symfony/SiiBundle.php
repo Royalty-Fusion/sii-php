@@ -73,6 +73,7 @@ final class SiiBundle extends AbstractBundle
                 ->scalarNode('folio_store')->defaultNull()->info('Servicio que implementa FolioStoreInterface (registro del último folio usado).')->end()
                 ->scalarNode('folio_file')->defaultNull()->info('Archivo JSON para registrar folios (FileFolioStore) si no se indica folio_store.')->end()
                 ->scalarNode('oficina_sii')->defaultNull()->info('Oficina del SII impresa en la representación (ej. "Santiago Oriente").')->end()
+                ->booleanNode('rcv_service')->defaultFalse()->info('Habilita RcvService (experimental: consulta del Registro de Compras y Ventas).')->end()
                 ->booleanNode('folio_service')->defaultFalse()->info('Habilita SiiFolioService (experimental: automatiza el formulario web de timbraje).')->end()
                 ->scalarNode('token_cache')->defaultNull()->info('Servicio PSR-6 (ej. cache.app).')->end()
                 ->integerNode('token_ttl')->defaultValue(1800)->min(60)->end()
@@ -154,6 +155,9 @@ final class SiiBundle extends AbstractBundle
         }
         if (isset($config['oficina_sii'])) {
             $seeConfig->call('withOficinaSii', [$config['oficina_sii']], true);
+        }
+        if ($config['rcv_service']) {
+            $seeConfig->call('withRcvService', [true], true);
         }
         if ($config['folio_service']) {
             $seeConfig->call('withFolioService', [true], true);

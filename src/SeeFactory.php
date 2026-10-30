@@ -77,6 +77,9 @@ final class SeeFactory
         if ($config->isFolioServiceEnabled()) {
             $see->enableFolioService();
         }
+        if ($config->isRcvServiceEnabled()) {
+            $see->enableRcvService();
+        }
 
         return $see;
     }

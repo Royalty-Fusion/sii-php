@@ -43,7 +43,8 @@ use RoyaltyFusion\Sii\Ws\SoapClient;
  *   SII_RESOLUCION_NUMERO (0), SII_RUT_RECEPTOR (= emisor), SII_RAZON_SOCIAL, SII_GIRO, SII_ACTECO,
  *   SII_DIRECCION, SII_COMUNA, SII_FOLIO_STORE (archivo de folios usados; por defecto SII_CAF_DIR/.folios-certificacion.json),
  *   SII_INTERCAMBIO_XML (sobre EnvioDTE recibido de un tercero para probar la lectura),
- *   SII_ESPERA_SEGUNDOS (tiempo máximo de espera por estado final; 300).
+ *   SII_ESPERA_SEGUNDOS (tiempo máximo de espera por estado final; 300),
+ *   SII_RCV_PERIODO (AAAAMM) y SII_RCV_RUT para consultar el Registro de Compras y Ventas (producción, sólo lectura).
  *
  *   vendor/bin/phpunit --testsuite certificacion
  *
@@ -180,6 +181,30 @@ final class CertificacionTest extends TestCase
             self::assertTrue($dte->firmaValida, $dte->getId().': firma inválida');
             self::assertTrue($dte->timbreValido, $dte->getId().': timbre inválido');
         }
+    }
+
+    /**
+     * Registro de Compras y Ventas (sólo lectura, datos reales). Requiere SII_RCV_PERIODO (AAAAMM) y,
+     * opcionalmente, SII_RCV_RUT (por defecto SII_RUT_EMISOR).
+     */
+    public function testRegistroDeComprasYVentas(): void
+    {
+        $periodo = self::env('SII_RCV_PERIODO');
+        if ($periodo === null) {
+            self::markTestSkipped('Defina SII_RCV_PERIODO (AAAAMM) para consultar el RCV.');
+        }
+        $rut = self::env('SII_RCV_RUT') ?? (string) self::env('SII_RUT_EMISOR');
+        $rcv = self::see()->enableRcvService()->getRcvService();
+
+        $resumen = $rcv->resumen($rut, $periodo);
+        $compras = $rcv->compras($rut, $periodo);
+        $esperadas = array_sum(array_map(static fn ($r) => $r->cantidad, $resumen));
+        self::assertCount($esperadas, $compras, 'El detalle debe coincidir con el resumen del RCV');
+        foreach ($compras as $c) {
+            self::assertGreaterThan(0, $c->folio);
+            self::assertNotSame('', $c->rutContraparte);
+        }
+        self::assertIsArray($rcv->ventas($rut, $periodo));
     }
 
     private static function see(): See

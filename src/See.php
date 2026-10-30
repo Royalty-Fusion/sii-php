@@ -19,6 +19,7 @@ use RoyaltyFusion\Sii\Model\AbstractDocument;
 use RoyaltyFusion\Sii\Model\Boleta;
 use RoyaltyFusion\Sii\Model\Company;
 use RoyaltyFusion\Sii\Model\Resolution;
+use RoyaltyFusion\Sii\Rcv\RcvService;
 use RoyaltyFusion\Sii\Report\RepresentationBuilder;
 use RoyaltyFusion\Sii\Report\RepresentationData;
 use RoyaltyFusion\Sii\Util\Rut;
@@ -65,6 +66,8 @@ final class See
     private ?FolioManager $folioManager = null;
     private ?SiiFolioService $folioService = null;
     private bool $folioServiceEnabled = false;
+    private ?RcvService $rcvService = null;
+    private bool $rcvEnabled = false;
     /** @var \Closure(): \DateTimeImmutable */
     private \Closure $clock;
     private ?HttpClientInterface $httpClient;
@@ -218,6 +221,29 @@ final class See
     public function getFolioManager(): FolioManager
     {
         return $this->folioManager ?? throw new InvalidArgumentException('Configure un registro de folios con setFolioStore() o SeeConfig::withFolioStore() (FileFolioStore, PdoFolioStore o propio) para asignar y consultar folios.');
+    }
+
+    /** Habilita la consulta del Registro de Compras y Ventas (RcvService). */
+    public function enableRcvService(bool $enabled = true): self
+    {
+        $this->rcvEnabled = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * Registro de Compras y Ventas del SII (compras recibidas de proveedores y ventas), para conciliar el ERP.
+     *
+     * EXPERIMENTAL y desactivado por defecto: el SII no publica un web service oficial del RCV; se usan los
+     * servicios de su sitio web con sesión por certificado. Actívelo con enableRcvService().
+     */
+    public function getRcvService(): RcvService
+    {
+        if (!$this->rcvEnabled) {
+            throw new InvalidArgumentException('RcvService está desactivado: usa los servicios internos del sitio web del SII (no hay web service oficial del RCV) y puede dejar de funcionar si el SII los cambia. Actívelo explícitamente con enableRcvService() o SeeConfig::withRcvService().');
+        }
+
+        return $this->rcvService ??= new RcvService($this->certificate, $this->httpClient, $this->logger);
     }
 
     /** Habilita el timbraje automatizado en el sitio web del SII (SiiFolioService). */

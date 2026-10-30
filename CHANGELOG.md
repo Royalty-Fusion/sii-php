@@ -35,7 +35,11 @@ Primera versión para integración con ERP.
 - Hora de Chile (`Util\Clock`) para todo lo generado, independiente de la zona horaria global; reloj inyectable.
 - `Util\Redactor`: los logs no contienen token, semilla firmada, `SignatureValue`, `X509Certificate`, `RSASK`, claves privadas ni la contraseña del certificado.
 - `See::getRepresentationData()` para imprimir con TCPDF (TED y parámetros del PDF417); `HtmlReport` opcional.
-- Intercambio: lectura de sobres recibidos, `RespuestaDTE` y `EnvioRecibos`.
+- Compras e intercambio: lectura de sobres recibidos con el documento completo (`DteXmlParser`: líneas,
+  referencias como OC `801`/guías `52`/`HES`, impuestos adicionales, descuentos globales y totales del emisor),
+  `RespuestaDTE` y `EnvioRecibos`.
+- Registro de Compras y Ventas (`Rcv\RcvService`, experimental y desactivado por defecto): resumen, compras y
+  ventas por período y estado; `RcvConciliacion` cruza el RCV con los registros del ERP.
 - `Rut::CONSUMIDOR_FINAL`, `Rut::isConsumidorFinal()` y `Client::consumidorFinal()`.
 
 ### Calidad

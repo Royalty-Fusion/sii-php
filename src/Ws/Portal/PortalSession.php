@@ -65,7 +65,7 @@ final class PortalSession
      *
      * @return array{0: string, 1: string, 2: string} [cuerpo (UTF-8 si es HTML), URL final, content-type]
      */
-    public function request(string $method, string $url, ?array $fields = null, bool $withClientCertificate = false): array
+    public function request(string $method, string $url, ?array $fields = null, bool $withClientCertificate = false, ?string $jsonBody = null): array
     {
         for ($redirects = 0; $redirects < 10; ++$redirects) {
             $options = [
@@ -81,7 +81,11 @@ final class PortalSession
                 $options['local_cert'] = $cert;
                 $options['local_pk'] = $key;
             }
-            if ($fields !== null && $method === 'POST') {
+            if ($jsonBody !== null) {
+                $options['headers']['Content-Type'] = 'application/json';
+                $options['headers']['Accept'] = 'application/json, text/plain, */*';
+                $options['body'] = $jsonBody;
+            } elseif ($fields !== null && $method === 'POST') {
                 $options['headers']['Content-Type'] = 'application/x-www-form-urlencoded';
                 $options['body'] = http_build_query(array_map(static fn ($v) => Text::toLatin1((string) $v), $fields));
             }
@@ -103,6 +107,7 @@ final class PortalSession
                 $url = HtmlForm::resolve($url, $headers['location'][0]);
                 $method = 'GET';
                 $fields = null;
+                $jsonBody = null;
                 continue;
             }
             if ($status >= 400) {
@@ -117,6 +122,29 @@ final class PortalSession
         }
 
         throw new WebServiceException('Demasiadas redirecciones en el sitio del SII.');
+    }
+
+    /**
+     * POST JSON a un servicio del sitio del SII (usa las cookies de la sesión).
+     *
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    public function postJson(string $url, array $payload): array
+    {
+        [$body] = $this->request('POST', $url, null, false, (string) json_encode($payload, \JSON_UNESCAPED_UNICODE));
+        $data = json_decode($body, true);
+        if (!\is_array($data)) {
+            throw new WebServiceException(sprintf('El servicio del SII %s no respondió JSON (¿cambió el servicio o expiró la sesión?): %s', $url, mb_substr(HtmlForm::text($body), 0, 300)), null, $body);
+        }
+
+        return $data;
+    }
+
+    public function getCookie(string $name): ?string
+    {
+        return $this->cookies[$name] ?? null;
     }
 
     /** @return array<string, string> */

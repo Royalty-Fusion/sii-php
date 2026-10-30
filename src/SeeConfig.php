@@ -35,6 +35,7 @@ final class SeeConfig
     private ?string $rutEnvia = null;
     private ?string $oficinaSii = null;
     private bool $folioService = false;
+    private bool $rcvService = false;
     /** @var list<string> */
     private array $secrets = [];
 
@@ -161,6 +162,20 @@ final class SeeConfig
         $c->folioService = $enabled;
 
         return $c;
+    }
+
+    /** Habilita RcvService (consulta del Registro de Compras y Ventas). Desactivado por defecto. */
+    public function withRcvService(bool $enabled = true): self
+    {
+        $c = clone $this;
+        $c->rcvService = $enabled;
+
+        return $c;
+    }
+
+    public function isRcvServiceEnabled(): bool
+    {
+        return $this->rcvService;
     }
 
     public function getCertificate(): Certificate
