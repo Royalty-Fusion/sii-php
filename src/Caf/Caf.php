@@ -20,6 +20,9 @@ use RoyaltyFusion\Sii\Xmldsig\RsaKey;
  *   <RSASK>clave privada para timbrar</RSASK>
  *   <RSAPUBK>clave pública</RSAPUBK>
  * </AUTORIZACION>
+ *
+ * SEGURIDAD: getSource() incluye la clave privada de timbraje (RSASK). No la registre en logs ni la
+ * exponga fuera del servidor; quien la obtenga puede timbrar documentos a nombre del emisor.
  */
 final class Caf
 {

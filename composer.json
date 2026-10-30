@@ -1,11 +1,23 @@
 {
-    "name": "royalty-fusion/sii-php",
+    "name": "royaltyfusion/sii-php",
     "description": "SDK PHP para Facturación Electrónica del SII de Chile (DTE, Boletas, Guías, Notas, Exportación): firma XMLDSig, CAF/TED, validación XSD y de negocio, y Web Services del SII.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["sii", "chile", "dte", "factura electronica", "boleta electronica", "xmldsig", "caf", "ted", "symfony"],
+    "keywords": [
+        "sii",
+        "chile",
+        "dte",
+        "factura electronica",
+        "boleta electronica",
+        "xmldsig",
+        "caf",
+        "ted",
+        "symfony"
+    ],
     "authors": [
-        { "name": "Royalty Fusion" }
+        {
+            "name": "Royalty Fusion"
+        }
     ],
     "require": {
         "php": ">=8.3",
@@ -15,33 +27,41 @@
         "ext-openssl": "*",
         "psr/cache": "^2.0 || ^3.0",
         "psr/log": "^2.0 || ^3.0",
-        "symfony/http-client": "^7.4 || ^8.0",
+        "symfony/http-client": "^6.4 || ^7.4 || ^8.0",
         "symfony/http-client-contracts": "^3.4"
     },
     "require-dev": {
+        "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^11.5 || ^12.0",
-        "symfony/cache": "^7.4 || ^8.0",
-        "symfony/config": "^7.4 || ^8.0",
-        "symfony/dependency-injection": "^7.4 || ^8.0",
-        "symfony/http-kernel": "^7.4 || ^8.0",
+        "symfony/cache": "^6.4 || ^7.4 || ^8.0",
+        "symfony/config": "^6.4 || ^7.4 || ^8.0",
+        "symfony/dependency-injection": "^6.4 || ^7.4 || ^8.0",
+        "symfony/http-kernel": "^6.4 || ^7.4 || ^8.0",
         "tecnickcom/tc-lib-barcode": "^2.4"
     },
     "suggest": {
         "symfony/http-kernel": "Para usar el bundle de Symfony (RoyaltyFusion\\Sii\\Bridge\\Symfony\\SiiBundle)",
         "symfony/cache": "Para cachear tokens del SII con un pool PSR-6",
-        "tecnickcom/tc-lib-barcode": "Para generar el timbre PDF417 en la representación impresa"
+        "tecnickcom/tc-lib-barcode": "Para generar el timbre PDF417 en la representación impresa",
+        "ext-pdo": "Para PdoFolioStore y PdoCafRepository (MariaDB/MySQL, PostgreSQL o SQLite)"
     },
     "autoload": {
-        "psr-4": { "RoyaltyFusion\\Sii\\": "src/" }
+        "psr-4": {
+            "RoyaltyFusion\\Sii\\": "src/"
+        }
     },
     "autoload-dev": {
-        "psr-4": { "RoyaltyFusion\\Sii\\Tests\\": "tests/" }
+        "psr-4": {
+            "RoyaltyFusion\\Sii\\Tests\\": "tests/"
+        }
     },
     "config": {
         "sort-packages": true
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit --testsuite unit",
+        "test-certificacion": "phpunit --testsuite certificacion",
+        "analyse": "phpstan analyse"
     },
     "minimum-stability": "stable"
 }

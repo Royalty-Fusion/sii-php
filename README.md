@@ -5,7 +5,7 @@ SDK PHP para emitir, validar, firmar y enviar Documentos Tributarios Electrónic
 intermediarios. Su diseño sigue el estilo de [Greenter](https://github.com/thegreenter/greenter)
 (el SDK de SUNAT Perú): modelos con setters encadenables, una fachada `See` y resultados tipados.
 
-- PHP **8.3+**, compatible con **Symfony 7.4** (incluye bundle).
+- PHP **8.3 a 8.5**, compatible con **Symfony 6.4, 7.4 y 8.x** (incluye bundle opcional).
 - No requiere `ext-soap`: los servicios SOAP del SII se consumen con un cliente liviano sobre
   `symfony/http-client`.
 - Incluye los **esquemas XSD oficiales del SII** (`resources/xsd`) y valida todo XML generado antes de enviarlo.
@@ -41,12 +41,27 @@ intermediarios. Su diseño sigue el estilo de [Greenter](https://github.com/theg
 | Web services | `Ws\DteService`, `Ws\BoletaService`, `Ws\RegistroReclamoService` | Semilla/token, upload `EnvioDTE`, `QueryEstUp`, `QueryEstDte`, `QueryEstDteAv`, API REST de boletas, aceptación/reclamo de DTE. |
 | Intercambio | `Intercambio\EnvioDteReader`, `Intercambio\ResponseBuilder` | Lee DTE de proveedores (verifica firma y timbre) y genera `RespuestaDTE` (recepción y resultado comercial) y `EnvioRecibos` (Ley 19.983). |
 | Representación impresa | `Report\HtmlReport`, `Report\TimbreGenerator` | HTML del documento con el timbre PDF417 (nivel de corrección 5). |
-| Symfony | `Bridge\Symfony\SiiBundle`, `SeeFactory` | Configuración por YAML, caché de tokens en un pool PSR-6, soporte multiempresa. |
+| Symfony / multiempresa | `Bridge\Symfony\SiiBundle`, `SeeFactory`, `SeeConfig` | Configuración por YAML, caché de tokens PSR-6, una configuración inmutable por empresa. |
+| Persistencia | `Pdo\PdoFolioStore`, `Pdo\PdoCafRepository` | Folios y CAF en MariaDB/MySQL/PostgreSQL/SQLite con `ext-pdo`. |
+| Estados | `Ws\Result\SendResult`, `EnvioStatus`, `DteStatus` | Resultados persistibles (`toArray()`), consulta diferida y reconciliación. |
 
 ## Instalación
 
+El paquete es privado. Agregue el repositorio (acceso por SSH) en el `composer.json` del proyecto:
+
+```json
+{
+    "repositories": [
+        { "type": "vcs", "url": "git@github.com:Royalty-Fusion/sii-php.git" }
+    ],
+    "require": {
+        "royaltyfusion/sii-php": "^0.1"
+    }
+}
+```
+
 ```bash
-composer require royalty-fusion/sii-php
+composer update royaltyfusion/sii-php
 ```
 
 Para el timbre PDF417 de la representación impresa:
@@ -55,8 +70,24 @@ Para el timbre PDF417 de la representación impresa:
 composer require tecnickcom/tc-lib-barcode
 ```
 
-Extensiones requeridas: `openssl`, `dom`, `libxml`, `mbstring`. Las fechas deben manejarse en hora de Chile
-(`date_default_timezone_set('America/Santiago')` o `date.timezone = America/Santiago` en `php.ini`).
+Requisitos: PHP 8.3 a 8.5, Symfony 6.4, 7.4 u 8.x (sólo `symfony/http-client`; el bundle es opcional) y las
+extensiones `openssl`, `dom`, `libxml` y `mbstring`. `ext-pdo` es opcional (`PdoFolioStore`, `PdoCafRepository`).
+
+### Zona horaria
+
+**No cambie la zona horaria global.** El SDK genera en hora de Chile (`America/Santiago`) todo lo que el SII
+exige (`TmstFirma`, `TSTED`, `TmstFirmaEnv`, fecha de emisión por defecto, vencimiento del CAF y validación de
+fechas), sin importar `date_default_timezone_get()`. Para controlar la hora (pruebas, colas) inyecte un reloj;
+el instante que retorne se convierte siempre a hora de Chile:
+
+```php
+$see = new See($certificado, Environment::PRODUCCION, $resolucion, clock: fn () => new DateTimeImmutable('now'));
+// o, por empresa: SeeConfig::...->withClock(fn () => $miReloj->now())
+```
+
+Las fechas que el ERP asigna al documento (`setFechaEmision()`, referencias, vencimientos) se toman como fecha
+calendario tal cual vienen. Si no indica la fecha de emisión se usa la fecha actual de Chile; para obtenerla
+use `RoyaltyFusion\Sii\Util\Clock::today()` (no `new DateTimeImmutable()`, que usa la zona del servidor).
 
 ## Uso rápido
 
@@ -65,6 +96,7 @@ use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Environment;
 use RoyaltyFusion\Sii\Model\{Client, Company, Detail, Dte, Resolution};
 use RoyaltyFusion\Sii\See;
+use RoyaltyFusion\Sii\Util\Clock;
 
 $see = new See(
     Certificate::fromFile('/ruta/firma.pfx', 'clave'),
@@ -82,8 +114,8 @@ $see->setCompany((new Company())
     ->setCiudad('Santiago'));
 
 $factura = Dte::factura()
-    ->setFolio(1)
-    ->setFechaEmision(new DateTimeImmutable())
+    ->setFolio(1)                             // o un FolioStore para asignarlo automáticamente
+    ->setFechaEmision(Clock::today())         // opcional: por defecto, la fecha actual de Chile
     ->setReceptor((new Client())
         ->setRut('96.790.240-3')
         ->setRazonSocial('Cliente S.A.')
@@ -140,6 +172,62 @@ Qué se valida antes de enviar:
 6. **Firmas**: se verifican las firmas generadas (DigestValue y SignatureValue) antes de enviar.
 7. **Sobre**: mismo emisor, sin folios duplicados, sin mezclar boletas y DTE, máximo de documentos,
    resolución coherente con el ambiente.
+
+### Contrato de resultados para el ERP
+
+| Resultado | Cómo se detecta | ¿Final? | Acción del ERP |
+|---|---|---|---|
+| Error de validación local | `ValidationException` (`getResult()`) | Sí | Corregir los datos. **No se envió nada**; el folio asignado automáticamente se libera. |
+| Error de comunicación antes de subir (semilla, token) | `AuthenticationException` / `WebServiceException` | No | Reintentar más tarde. No se envió nada; los folios siguen libres. |
+| Upload rechazado por el SII (STATUS ≠ 0) | `SendResult::isRejected()` (`status`, `message`, `errors`) | Sí | Corregir y reenviar. Los folios **no** quedaron registrados en el SII. |
+| Comunicación cortada **durante** la subida | `UploadUncertainException` (`getState()`) | No | Guardar `getState()`, **no reutilizar los folios**, reconciliar con `See::reconcile()`. |
+| Envío recibido con TrackID | `SendResult::isPending()` / `isSuccess()` | No | Guardar `SendResult::toArray()` y consultar con `See::resumeStatus()` (cron). |
+| `REC`, `SOK`, `CRT`, `FOK`, `PDR` | `EnvioStatus::isPending()` | No | Volver a consultar (procesando). |
+| Código numérico (ej. `-11`) | `EnvioStatus::isQueryError()` (también `isPending()`) | No | Reintentar la consulta más tarde (TrackID aún no disponible o error de consulta). |
+| `EPR` sin rechazos ni reparos | `EnvioStatus::isAccepted()` | Sí | Documentos aceptados. |
+| `EPR` con reparos, `RPR`, `RLV` | `EnvioStatus::isAcceptedWithObjections()` | Sí | Aceptados; revisar las observaciones. |
+| `EPR` con algunos rechazados | `EnvioStatus::isPartiallyRejected()` | Sí | Consultar cada documento (`getDocumentStatus()` / `reconcile()`); reemitir sólo los rechazados. |
+| `EPR` con todos rechazados, `RSC`, `RFR`, `RCT`, `RCH` | `EnvioStatus::isRejected()` | Sí | Corregir y reenviar; los folios rechazados no quedan usados. |
+| `DOK`, `TMD`, `TMC`, `MMD`, `MMC` | `DteStatus::isAccepted()` | Sí | Documento vigente en el SII. |
+| `FAU` (no recibido) | `DteStatus::isPending()` | No | Si la subida fue incierta: reenviar el **mismo** sobre con `sendXml()`. |
+| `DNK` (datos no coinciden) | `DteStatus::isMismatch()` / `isReceived()` | Sí | El folio existe en el SII: revisar monto/fecha/RUT consultados; **no** reutilizar el folio. |
+| `FAN`, `ANC`, `AND` | `DteStatus::isAnnulled()` | Sí | Documento anulado (directamente o por nota). |
+| `FNA`, `EMP` | `DteStatus::isRejected()` | Sí | No autorizado: revisar CAF / autorización del emisor. |
+
+#### Emisión asíncrona (cron) y reconciliación
+
+```php
+try {
+    $result = $see->send($factura);
+    $erp->guardarEnvio(json_encode($result->toArray()));     // TrackID, RUT emisor/envía, documentos, fecha, sobre firmado
+} catch (UploadUncertainException $e) {
+    $erp->guardarEnvio(json_encode($e->getState()));          // mismo formato, sin TrackID
+}
+
+// En otro proceso:
+$estado = json_decode($fila->envio, true);
+if ($estado['track_id'] !== null) {
+    $status = $see->resumeStatus($estado);                    // sin rearmar ni refirmar el documento
+} else {
+    foreach ($see->reconcile($estado) as $id => $dte) {       // por tipo, folio, RUT, monto y fecha
+        if ($dte->isPending()) { /* FAU: reenviar el mismo sobre */ $see->sendXml(base64_decode($estado['sobre']), $estado['rut_emisor']); break; }
+    }
+}
+```
+
+### Montos en pesos (CLP)
+
+En documentos nacionales todos los montos que calcula `TotalsCalculator` son **enteros** (por línea, descuentos,
+neto, exento, IVA, impuestos y total). Sólo hay decimales en documentos de exportación (moneda extranjera, 2
+decimales) y en los montos de `OtherCurrency`. El IVA se calcula sobre el neto total, no por línea. Si el ERP
+informa `setMontoTotalEsperado()` y no coincide, el error indica la diferencia y las líneas redondeadas, por
+ejemplo: `diferencia 1. Posibles causas: Línea 1 "Tornillo": 3 × 33.5 = 100.5, redondeado a 101; IVA por línea = 20, pero el SII calcula el IVA sobre el neto total = 19`.
+
+### Consumidor final
+
+`Rut::CONSUMIDOR_FINAL` (`66666666-6`), `Rut::isConsumidorFinal()` y `Client::consumidorFinal()`. Una boleta
+sin receptor usa este RUT automáticamente. El validador lo rechaza en facturas y lo admite sólo en boletas y en
+notas de crédito/débito que referencian una boleta (39/41).
 
 ### Otros documentos
 
@@ -215,11 +303,12 @@ $see->getDocumentStatus($prepared);        // QueryEstDte / estado de boleta
 **Consultar y asignar folios** a partir de los CAF cargados (sin conectarse al SII):
 
 ```php
-use RoyaltyFusion\Sii\Folio\FileFolioStore;
+use RoyaltyFusion\Sii\Pdo\PdoFolioStore;
 
-// Registro del último folio usado. FileFolioStore usa bloqueo de archivo (seguro entre procesos del
-// mismo servidor); en un ERP implemente FolioStoreInterface sobre su base de datos (SELECT ... FOR UPDATE).
-$see->setFolioStore(new FileFolioStore('/var/lib/erp/sii-folios.json'));
+// Registro del último folio usado (obligatorio para asignar folios automáticamente):
+//  - PdoFolioStore: base de datos (SELECT ... FOR UPDATE o GET_LOCK), seguro entre servidores;
+//  - FileFolioStore: archivo con flock, seguro entre procesos de un mismo servidor.
+$see->setFolioStore(new PdoFolioStore($pdo, 'tenant42:sucursal3'));
 $folios = $see->getFolioManager();
 
 $folios->setUltimoUsado('76123456-7', 33, 1520);   // al migrar desde otro sistema
@@ -237,13 +326,15 @@ $folios->requiereNuevoCaf('76123456-7', 33, 50);   // true si quedan menos de 50
 $see->send(Dte::factura()->setReceptor($cliente)->addDetalle($detalle));
 ```
 
-**Obtener folios del SII (EXPERIMENTAL).** El SII no ofrece un web service para pedir CAF: solo
-existe el formulario web de "Timbraje electrónico". `SiiFolioService` lo automatiza autenticándose con
-el certificado digital (debe tener permiso de timbraje para la empresa). Todo CAF descargado se valida
-(tipo, RUT, ambiente y par de claves) antes de retornarlo. Si el SII cambia sus formularios, se lanza una
-excepción con el mensaje de la página; nunca se retorna un CAF incorrecto.
+**Obtener folios del SII (EXPERIMENTAL, desactivado por defecto).** El SII no ofrece un web service para
+pedir CAF: solo existe el formulario web de "Timbraje electrónico". `SiiFolioService` lo automatiza
+autenticándose con el certificado digital (debe tener permiso de timbraje para la empresa). Hay que activarlo
+explícitamente; si no, `getFolioService()` lanza una excepción. Todo CAF descargado se valida (tipo, RUT,
+ambiente y par de claves) antes de retornarlo. Si el SII cambia sus formularios, se lanza una excepción con el
+texto de la página del SII; nunca se retorna un CAF incorrecto.
 
 ```php
+$see->enableFolioService();                        // o SeeConfig::withFolioService()
 $sii = $see->getFolioService();
 
 $info = $sii->consultar('76123456-7', 33);         // no solicita nada: máximo autorizado, mensajes del SII
@@ -257,6 +348,28 @@ $caf = $sii->reobtener('76123456-7', 33, 1);       // vuelve a descargar un CAF 
 ```
 
 ### Representación impresa
+
+**Con TCPDF u otro motor (sin dependencias nuevas):** `See::getRepresentationData()` entrega todos los datos
+del documento y el TED listo para el PDF417.
+
+```php
+$data = $see->getRepresentationData($prepared);      // usa la resolución y la oficina configuradas
+$data->documento;      // tipo, nombre, folio, fecha_emision, ...
+$data->emisor;         // rut, rut_formateado, razon_social, giro, direccion, comuna, ...
+$data->receptor;       // null en boletas sin receptor
+$data->detalle;        // líneas con cantidad, precio, descuento y monto
+$data->totales;        // monto_neto, monto_exento, iva, impuestos, monto_total, otra_moneda
+$data->referencias;
+$data->resolucion;     // ['numero' => 0, 'fecha' => '2024-01-15', 'texto' => 'Res. 0 de 2024']
+$data->oficinaSii;     // "SANTIAGO ORIENTE"
+$data->leyendaTimbre;  // "Timbre Electrónico SII - Res. 0 de 2024 - Verifique documento: www.sii.cl"
+$data->admiteCedible;  // facturas y guías
+
+// PDF417 con nivel de corrección 5 (exigido por el SII):
+$pdf->write2DBarcode($data->tedLatin1, $data->pdf417['tcpdf_type'], $x, $y, $data->pdf417['ancho_mm'], $data->pdf417['alto_mm']);
+```
+
+`HtmlReport` (HTML con el PDF417 embebido) sigue disponible y requiere `tecnickcom/tc-lib-barcode`:
 
 ```php
 use RoyaltyFusion\Sii\Report\HtmlReport;
@@ -287,7 +400,7 @@ $see->getRegistroReclamo()->registrar('76123456-7', 33, 1234, RegistroReclamoSer
 $see->getRegistroReclamo()->listarEventos('76123456-7', 33, 1234);
 ```
 
-## Symfony 7.4
+## Symfony (6.4, 7.4 y 8.x)
 
 ```php
 // config/bundles.php
@@ -318,26 +431,71 @@ sii:
         ciudad: Santiago
 ```
 
+Sin la sección `certificate` el bundle sólo registra `SeeFactory` (ERP multiempresa).
+
+## Multiempresa
+
+`SeeFactory` comparte sólo infraestructura (cliente HTTP, caché de tokens, logger por defecto). Todo lo de
+cada empresa llega en un `SeeConfig` inmutable, sin estado global:
+
 ```php
-use RoyaltyFusion\Sii\See;
-use RoyaltyFusion\Sii\SeeFactory;
+use RoyaltyFusion\Sii\Pdo\{PdoCafRepository, PdoFolioStore};
+use RoyaltyFusion\Sii\{SeeConfig, SeeFactory};
 
-final class FacturacionController
-{
-    public function __construct(private See $see, private SeeFactory $factory) {}
-
-    public function emitir(): Response
-    {
-        $result = $this->see->send($factura);
-        // ERP multiempresa: una instancia por empresa
-        $seeEmpresaB = $this->factory->createFromFile($rutaPfx, $clave, new Resolution('2023-03-01', 80));
-    }
-}
+$config = SeeConfig::fromPkcs12($empresa->pfx, $empresa->clavePfx)    // o fromPem() / fromFile() / create($certificate)
+    ->withEnvironment(Environment::PRODUCCION)
+    ->withResolution(new Resolution('2023-03-01', 80))
+    ->withCafRepository(new PdoCafRepository($pdo, "tenant{$id}:{$sucursal}"))
+    ->withFolioStore(new PdoFolioStore($pdo, "tenant{$id}:{$sucursal}"))  // nunca compartido entre empresas
+    ->withCompany($emisor)
+    ->withClock(fn () => $reloj->now())                                    // opcional
+    ->withLogger($logger)                                                  // opcional (se redacta)
+    ->withOficinaSii('Santiago Oriente');
+$see = $factory->create($config);
 ```
 
-Para almacenar los CAF en la base de datos del ERP implemente `Caf\CafRepositoryInterface`
-(métodos `find($rutEmisor, $tipoDte, $folio)` y `findAll($rutEmisor, $tipoDte)`) y configure
-`caf_repository`; para el registro de folios implemente `Folio\FolioStoreInterface` y configure `folio_store`.
+Ver `examples/erp-multiempresa.php` (certificado, CAF y folios en la base de datos).
+
+### Tablas para PDO (MariaDB)
+
+`PdoFolioStore` y `PdoCafRepository` sólo requieren `ext-pdo`. El `scope` (prefijo) identifica a la empresa y
+al establecimiento, porque en un ERP multiempresa el RUT solo no basta. `PdoCafRepository` acepta además el
+nombre de la tabla y de la columna de scope (`new PdoCafRepository($pdo, 'tenant42', 'mis_caf', 'tenant_id')`).
+
+```sql
+CREATE TABLE IF NOT EXISTS sii_folios (
+    scope         VARCHAR(64)     NOT NULL DEFAULT '',
+    rut_emisor    VARCHAR(10)     NOT NULL,
+    tipo_dte      SMALLINT        NOT NULL,
+    ultimo_folio  BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    actualizado   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (scope, rut_emisor, tipo_dte)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sii_caf (
+    id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scope              VARCHAR(64)     NOT NULL DEFAULT '',
+    rut_emisor         VARCHAR(10)     NOT NULL,
+    tipo_dte           SMALLINT        NOT NULL,
+    folio_desde        BIGINT UNSIGNED NOT NULL,
+    folio_hasta        BIGINT UNSIGNED NOT NULL,
+    fecha_autorizacion DATE            NOT NULL,
+    certificacion      TINYINT(1)      NOT NULL DEFAULT 0,
+    xml                MEDIUMBLOB      NOT NULL,
+    creado             TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_sii_caf (scope, rut_emisor, tipo_dte, folio_desde),
+    KEY ix_sii_caf_rango (scope, rut_emisor, tipo_dte, folio_desde, folio_hasta)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+(`resources/sql/mariadb.sql` y `resources/sql/sqlite.sql`.) `PdoFolioStore` usa `SELECT … FOR UPDATE` dentro de
+una transacción (o `new PdoFolioStore($pdo, $scope, 'sii_folios', 'get_lock')` para `GET_LOCK()` de MariaDB); si
+el PDO ya está en una transacción del ERP, la reutiliza (un rollback del ERP libera el folio).
+
+> **Seguridad del CAF.** El XML del CAF incluye la clave privada de timbraje (`RSASK`): con ella se puede timbrar
+> documentos a nombre del emisor. No la registre en logs (el `Redactor` la oculta), no la exponga por APIs ni
+> en respuestas al navegador, restrinja el acceso a la tabla `sii_caf` y cifre los respaldos.
 
 ## Ambientes
 
@@ -382,19 +540,42 @@ Todas implementan `RoyaltyFusion\Sii\Exception\SiiException`. Las respuestas de 
 - El XML se serializa con un escritor propio, determinista y sin espacios, para que los bytes firmados (TED y XMLDSig) no se alteren.
 - Cada DTE declara los mismos namespaces que tendrá dentro del sobre, de modo que la firma del DTE es válida tanto suelto como dentro del `EnvioDTE`.
 - Las firmas generadas se verificaron además con `libxmlsec1` (implementación independiente) y el timbre PDF417 se verificó decodificándolo.
+- Los logs pasan por `Util\Redactor`: nunca se registran el token, la semilla firmada, `SignatureValue`, `X509Certificate`, la clave del CAF (`RSASK`), claves privadas ni la contraseña del certificado.
 
-## No incluido
+## Pendiente / no incluido
 
-- Liquidación-Factura (43), cesión de facturas (AEC/RTC), Libro de Guías y Consumo de Folios (RCOF,
-  eliminado por el SII para boletas desde 2022). El Libro de Compras y Ventas fue reemplazado por el RCV,
-  que el SII construye a partir de los DTE recibidos.
+Planificado para versiones siguientes:
+
+- Cesión de facturas (AEC), Libro de Guías y Liquidación-Factura (43).
+- Consulta del Registro de Compras y Ventas (RCV) para conciliación.
+
+No incluido: Consumo de Folios (RCOF), eliminado por el SII para boletas desde 2022, y el Libro de Compras y
+Ventas, reemplazado por el RCV que el SII construye a partir de los DTE recibidos.
 
 ## Desarrollo
 
 ```bash
 composer install
-vendor/bin/phpunit
+vendor/bin/phpunit                 # pruebas unitarias (suite "unit")
+vendor/bin/phpstan analyse         # nivel 6
 ```
+
+### Pruebas reales en certificación
+
+La suite `certificacion` envía documentos reales a `maullin.sii.cl`, `apicert.sii.cl` y `pangal.sii.cl`: semilla y
+token (DTE y boletas), factura 33, guía 52, boleta 39, notas de crédito 61 con `CodRef` 1 y 3, `getStatus`,
+`getDocumentStatus`, reconciliación y lectura de un sobre de intercambio. Sólo corre si están definidas las
+variables; sin ellas se omite, y la CI no la ejecuta.
+
+```bash
+SII_CERT_PFX=/ruta/firma.pfx SII_CERT_PASSWORD=*** SII_RUT_EMISOR=76123456-7 \
+SII_CAF_DIR=/ruta/caf-certificacion SII_RESOLUCION_FECHA=2024-01-15 \
+vendor/bin/phpunit --testsuite certificacion
+```
+
+Opcionales: `SII_RESOLUCION_NUMERO`, `SII_RUT_RECEPTOR`, `SII_RAZON_SOCIAL`, `SII_GIRO`, `SII_ACTECO`,
+`SII_DIRECCION`, `SII_COMUNA`, `SII_INTERCAMBIO_XML` (sobre de un tercero), `SII_ESPERA_SEGUNDOS` y
+`SII_FOLIO_STORE` (archivo con los folios ya usados; por defecto `SII_CAF_DIR/.folios-certificacion.json`).
 
 Los tests usan un certificado y CAF **ficticios** (`tests/Fixtures`) firmados con una clave "SII" falsa;
 no sirven para emitir documentos reales.

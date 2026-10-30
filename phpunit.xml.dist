@@ -5,10 +5,16 @@
          colors="true"
          failOnWarning="true"
          failOnRisky="true"
+         defaultTestSuite="unit"
          cacheDirectory=".phpunit.cache">
     <testsuites>
-        <testsuite name="sii-php">
+        <testsuite name="unit">
             <directory>tests</directory>
+            <exclude>tests/Certificacion</exclude>
+        </testsuite>
+        <!-- Pruebas reales contra maullin/apicert/pangal: sólo corren con las variables SII_* definidas. -->
+        <testsuite name="certificacion">
+            <directory>tests/Certificacion</directory>
         </testsuite>
     </testsuites>
     <source>

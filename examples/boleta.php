@@ -13,7 +13,7 @@ $see = require __DIR__.'/bootstrap.php';
 // En boletas los precios incluyen IVA; el SDK desglosa neto e IVA.
 $boleta = Boleta::afecta()
     ->setFolio(1)
-    ->setFechaEmision(new DateTimeImmutable())
+    ->setFechaEmision(\RoyaltyFusion\Sii\Util\Clock::today())
     ->addDetalle(Detail::create('Café americano', 2, 1990))
     ->addDetalle(Detail::create('Croissant', 1, 2500));
 

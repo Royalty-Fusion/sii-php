@@ -29,7 +29,7 @@ final class Text
         }
         if (!mb_check_encoding($value, 'UTF-8')) {
             // Se asume que llega en ISO-8859-1 / Windows-1252 desde sistemas antiguos.
-            $value = mb_convert_encoding($value, 'UTF-8', 'Windows-1252');
+            $value = (string) mb_convert_encoding($value, 'UTF-8', 'Windows-1252');
         }
         $value = strtr($value, self::REPLACEMENTS);
         // Elimina caracteres de control excepto tabulación y saltos de línea.
@@ -72,12 +72,12 @@ final class Text
     /** Convierte UTF-8 a ISO-8859-1 (los caracteres fuera de rango ya fueron saneados). */
     public static function toLatin1(string $utf8): string
     {
-        return mb_convert_encoding($utf8, 'ISO-8859-1', 'UTF-8');
+        return (string) mb_convert_encoding($utf8, 'ISO-8859-1', 'UTF-8');
     }
 
     public static function toUtf8(string $latin1): string
     {
-        return mb_convert_encoding($latin1, 'UTF-8', 'ISO-8859-1');
+        return (string) mb_convert_encoding($latin1, 'UTF-8', 'ISO-8859-1');
     }
 
     /**

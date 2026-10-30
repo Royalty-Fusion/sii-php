@@ -22,13 +22,13 @@ $cliente = (new Client())
 
 $factura = Dte::factura()
     ->setFolio(1)
-    ->setFechaEmision(new DateTimeImmutable())
+    ->setFechaEmision(\RoyaltyFusion\Sii\Util\Clock::today())
     ->setFormaPago(1)
     ->setReceptor($cliente)
     ->addDetalle(Detail::create('Notebook', 2, 450000, 'UN')->setDescuentoPorcentaje(5))
     ->addDetalle(Detail::create('Instalación', 1, 35000)->setExento())
     ->addDescuentoGlobal(GlobalDiscount::descuentoPorcentaje(2.5, 'Descuento por volumen'))
-    ->addReferencia(Reference::create('801', 'OC-4512', new DateTimeImmutable('-3 days'), null, 'Orden de compra'))
+    ->addReferencia(Reference::create('801', 'OC-4512', \RoyaltyFusion\Sii\Util\Clock::today()->modify('-3 days'), null, 'Orden de compra'))
     ->setMontoTotalEsperado(null); // opcional: total calculado por el ERP para verificar
 
 // 1) Validar antes de emitir (no lanza excepción)

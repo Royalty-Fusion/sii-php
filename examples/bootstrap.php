@@ -11,8 +11,6 @@ declare(strict_types=1);
 
 require __DIR__.'/../vendor/autoload.php';
 
-// Las fechas de emisión y timestamps deben estar en hora de Chile.
-date_default_timezone_set('America/Santiago');
 
 use RoyaltyFusion\Sii\Certificate\Certificate;
 use RoyaltyFusion\Sii\Environment;
@@ -20,6 +18,7 @@ use RoyaltyFusion\Sii\Model\Company;
 use RoyaltyFusion\Sii\Model\Resolution;
 use RoyaltyFusion\Sii\See;
 
+// No hace falta cambiar la zona horaria global: el SDK genera fechas y timestamps en hora de Chile.
 $see = new See(
     Certificate::fromFile(getenv('SII_CERT_PATH') ?: __DIR__.'/../tests/Fixtures/certificado.pfx', getenv('SII_CERT_PASSWORD') ?: 'prueba123'),
     Environment::CERTIFICACION,

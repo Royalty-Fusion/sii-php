@@ -66,7 +66,7 @@ final class FileFolioStore implements FolioStoreInterface
      *
      * @template T
      *
-     * @param callable(array<string, int>): array{0: T, 1: array<string, int>} $callback
+     * @param callable(array<string, int>): array{0: T, 1: array<mixed>} $callback
      *
      * @return T
      */
