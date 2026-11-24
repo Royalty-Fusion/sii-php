@@ -48,12 +48,12 @@ intermediarios. Su diseño sigue el estilo de [Greenter](https://github.com/theg
 
 ## Instalación
 
-El paquete es privado. Agregue el repositorio (acceso por SSH) en el `composer.json` del proyecto:
+Agregue el repositorio en el `composer.json` del proyecto:
 
 ```json
 {
     "repositories": [
-        { "type": "vcs", "url": "git@github.com:Royalty-Fusion/sii-php.git" }
+        { "type": "vcs", "url": "https://github.com/Royalty-Fusion/sii-php.git" }
     ],
     "require": {
         "royaltyfusion/sii-php": "^0.1"
